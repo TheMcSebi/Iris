@@ -1,16 +1,35 @@
 package net.coderbot.iris.shadows.frustum.advanced;
 
-import com.mojang.math.Matrix4f;
-import com.mojang.math.Vector3f;
-import com.mojang.math.Vector4f;
+import net.coderbot.iris.vendored.joml.Math;
 import net.coderbot.iris.shadows.frustum.BoxCuller;
+import net.coderbot.iris.vendored.joml.Matrix4f;
+import net.coderbot.iris.vendored.joml.Vector3f;
+import net.coderbot.iris.vendored.joml.Vector4f;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.world.phys.AABB;
 
+/**
+ * A Frustum implementation that derives a tightly-fitted shadow pass frustum based on the player's camera frustum and
+ * an assumption that the shadow map will only be sampled for the purposes of direct shadow casting, volumetric lighting,
+ * and similar effects, but notably not sun-bounce GI or similar effects.
+ *
+ * <p>The key idea of this algorithm is that if you are looking at the sun, something behind you cannot directly cast
+ * a shadow on things visible to you. It's clear why this wouldn't work for sun-bounce GI, since with sun-bounce GI an
+ * object behind you could cause light to bounce on to things visible to you.</p>
+ *
+ * <p>Derived from L. Spiro's clever algorithm & helpful diagrams described in a two-part blog tutorial:</p>
+ *
+ * <ul>
+ * <li><a href="http://lspiroengine.com/?p=153">Tutorial: Tightly Culling Shadow Casters for Directional Lights (Part 1)</a></li>
+ * <li><a href="http://lspiroengine.com/?p=187">Tutorial: Tightly Culling Shadow Casters for Directional Lights (Part 2)</a></li>
+ * </ul>
+ *
+ * <p>Notable changes include switching out some of the sub-algorithms for computing the "extruded" edge planes to ones that
+ * are not sensitive to the specific internal ordering of planes and corners, in order to avoid potential bugs at the
+ * cost of slightly more computations.</p>
+ */
 public class AdvancedShadowCullingFrustum extends Frustum {
-	// conservative estimate for the maximum number of clipping planes:
-	// 6 base planes, and 5 possible planes added for each base plane.
-	private static final int MAX_CLIPPING_PLANES = 6 * 5;
+	private static final int MAX_CLIPPING_PLANES = 13;
 
 	/**
 	 * We store each plane equation as a Vector4f.
@@ -54,7 +73,7 @@ public class AdvancedShadowCullingFrustum extends Frustum {
 	public AdvancedShadowCullingFrustum(Matrix4f playerView, Matrix4f playerProjection, Vector3f shadowLightVectorFromOrigin,
 										BoxCuller boxCuller) {
 		// We're overriding all of the methods, don't pass any matrices down.
-		super(new Matrix4f(), new Matrix4f());
+		super(new com.mojang.math.Matrix4f(), new com.mojang.math.Matrix4f());
 
 		this.shadowLightVectorFromOrigin = shadowLightVectorFromOrigin;
 		BaseClippingPlanes baseClippingPlanes = new BaseClippingPlanes(playerView, playerProjection);
@@ -259,19 +278,19 @@ public class AdvancedShadowCullingFrustum extends Frustum {
 		this.z = cameraZ;
 	}
 
-	@Override
 	public boolean isVisible(AABB aabb) {
 		if (boxCuller != null && boxCuller.isCulled(aabb)) {
 			return false;
 		}
 
-		return this.isVisible(aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
+		return this.isVisible(aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ) != 0;
 	}
 
 	// For Sodium
-	public boolean fastAabbTest(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+	// TODO: change this to respect intersections on 1.18+!
+	public int fastAabbTest(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
 		if (boxCuller != null && boxCuller.isCulled(minX, minY, minZ, maxX, maxY, maxZ)) {
-			return false;
+			return 0;
 		}
 
 		return isVisible(minX, minY, minZ, maxX, maxY, maxZ);
@@ -283,37 +302,61 @@ public class AdvancedShadowCullingFrustum extends Frustum {
 		return false;
 	}
 
-	private boolean isVisible(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
+	private int isVisible(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
 		float f = (float)(minX - this.x);
 		float g = (float)(minY - this.y);
 		float h = (float)(minZ - this.z);
 		float i = (float)(maxX - this.x);
 		float j = (float)(maxY - this.y);
 		float k = (float)(maxZ - this.z);
-		return this.isAnyCornerVisible(f, g, h, i, j, k);
+		return this.checkCornerVisibility(f, g, h, i, j, k);
 	}
 
-	private boolean isAnyCornerVisible(float x1, float y1, float z1, float x2, float y2, float z2) {
+
+	/**
+	 * Checks corner visibility.
+	 * @param minX Minimum X value of the AABB.
+	 * @param minY Minimum Y value of the AABB.
+	 * @param minZ Minimum Z value of the AABB.
+	 * @param maxX Maximum X value of the AABB.
+	 * @param maxY Maximum Y value of the AABB.
+	 * @param maxZ Maximum Z value of the AABB.
+	 * @return 0 if nothing is visible, 1 if everything is visible, 2 if only some corners are visible.
+	 */
+	private int checkCornerVisibility(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+		float outsideBoundX;
+		float outsideBoundY;
+		float outsideBoundZ;
+
 		for (int i = 0; i < planeCount; ++i) {
 			Vector4f plane = this.planes[i];
 
-			// dot(plane, point) > 0.0F implies inside
-			// if no points are inside, then this box lies entirely outside of the frustum.
-			// this avoids false negative - a single point being inside causes the box to pass
-			// this plane test
+			// Check if plane is inside or intersecting.
+			// This is ported from JOML's FrustumIntersection.
 
-			if (       !(plane.dot(new Vector4f(x1, y1, z1, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x2, y1, z1, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x1, y2, z1, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x2, y2, z1, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x1, y1, z2, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x2, y1, z2, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x1, y2, z2, 1.0F)) > 0.0F)
-					&& !(plane.dot(new Vector4f(x2, y2, z2, 1.0F)) > 0.0F)) {
-				return false;
+			if (plane.x() < 0) {
+				outsideBoundX = minX;
+			} else {
+				outsideBoundX = maxX;
+			}
+
+			if (plane.y() < 0) {
+				outsideBoundY = minY;
+			} else {
+				outsideBoundY = maxY;
+			}
+
+			if (plane.z() < 0) {
+				outsideBoundZ = minZ;
+			} else {
+				outsideBoundZ = maxZ;
+			}
+
+			if (Math.fma(plane.x(), outsideBoundX, Math.fma(plane.y(), outsideBoundY, plane.z() * outsideBoundZ)) < -plane.w()) {
+				return 0;
 			}
 		}
 
-		return true;
+		return 2;
 	}
 }

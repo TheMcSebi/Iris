@@ -1,23 +1,48 @@
 package net.coderbot.iris.gl.blending;
 
-import java.util.Optional;
-
 import org.lwjgl.opengl.GL11;
 
+import java.util.Optional;
+
 public enum AlphaTestFunction {
-	NEVER(GL11.GL_NEVER),
-	LESS(GL11.GL_LESS),
-	EQUAL(GL11.GL_EQUAL),
-	LEQUAL(GL11.GL_LEQUAL),
-	GREATER(GL11.GL_GREATER),
-	NOTEQUAL(GL11.GL_NOTEQUAL),
-	GEQUAL(GL11.GL_GEQUAL),
-	ALWAYS(GL11.GL_ALWAYS);
+	NEVER(GL11.GL_NEVER, null),
+	LESS(GL11.GL_LESS, "<"),
+	EQUAL(GL11.GL_EQUAL, "=="),
+	LEQUAL(GL11.GL_LEQUAL, "<="),
+	GREATER(GL11.GL_GREATER, ">"),
+	NOTEQUAL(GL11.GL_NOTEQUAL, "!="),
+	GEQUAL(GL11.GL_GEQUAL, ">="),
+	ALWAYS(GL11.GL_ALWAYS, null);
 
 	private final int glId;
+	private final String expression;
 
-	AlphaTestFunction(int glFormat) {
+	AlphaTestFunction(int glFormat, String expression) {
 		this.glId = glFormat;
+		this.expression = expression;
+	}
+
+	public static Optional<AlphaTestFunction> fromGlId(int glId) {
+		switch(glId) {
+			case GL11.GL_NEVER:
+				return Optional.of(NEVER);
+			case GL11.GL_LESS:
+				return Optional.of(LESS);
+			case GL11.GL_EQUAL:
+				return Optional.of(EQUAL);
+			case GL11.GL_LEQUAL:
+				return Optional.of(LEQUAL);
+			case GL11.GL_GREATER:
+				return Optional.of(GREATER);
+			case GL11.GL_NOTEQUAL:
+				return Optional.of(NOTEQUAL);
+			case GL11.GL_GEQUAL:
+				return Optional.of(GEQUAL);
+			case GL11.GL_ALWAYS:
+				return Optional.of(ALWAYS);
+			default:
+				return Optional.empty();
+		}
 	}
 
 	public static Optional<AlphaTestFunction> fromString(String name) {
@@ -39,5 +64,9 @@ public enum AlphaTestFunction {
 
 	public int getGlId() {
 		return glId;
+	}
+
+	public String getExpression() {
+		return expression;
 	}
 }

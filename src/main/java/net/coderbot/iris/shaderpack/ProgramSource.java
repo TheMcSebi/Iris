@@ -1,5 +1,7 @@
 package net.coderbot.iris.shaderpack;
 
+import net.coderbot.iris.gl.blending.BlendModeOverride;
+
 import java.util.Optional;
 
 public class ProgramSource {
@@ -10,13 +12,29 @@ public class ProgramSource {
 	private final ProgramDirectives directives;
 	private final ProgramSet parent;
 
-	public ProgramSource(String name, String vertexSource, String geometrySource, String fragmentSource, ProgramSet parent, ShaderProperties properties) {
+	private ProgramSource(String name, String vertexSource, String geometrySource, String fragmentSource,
+						 ProgramDirectives directives, ProgramSet parent) {
+		this.name = name;
+		this.vertexSource = vertexSource;
+		this.geometrySource = geometrySource;
+		this.fragmentSource = fragmentSource;
+		this.directives = directives;
+		this.parent = parent;
+	}
+
+	public ProgramSource(String name, String vertexSource, String geometrySource, String fragmentSource,
+						 ProgramSet parent, ShaderProperties properties, BlendModeOverride defaultBlendModeOverride) {
 		this.name = name;
 		this.vertexSource = vertexSource;
 		this.geometrySource = geometrySource;
 		this.fragmentSource = fragmentSource;
 		this.parent = parent;
-		this.directives = new ProgramDirectives(this, properties, PackRenderTargetDirectives.BASELINE_SUPPORTED_RENDER_TARGETS);
+		this.directives = new ProgramDirectives(this, properties,
+				PackRenderTargetDirectives.BASELINE_SUPPORTED_RENDER_TARGETS, defaultBlendModeOverride);
+	}
+
+	public ProgramSource withDirectiveOverride(ProgramDirectives overrideDirectives) {
+		return new ProgramSource(name, vertexSource, geometrySource, fragmentSource, overrideDirectives, parent);
 	}
 
 	public String getName() {

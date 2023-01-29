@@ -1,14 +1,15 @@
 package net.coderbot.iris.gl.uniform;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.math.Matrix4f;
+import net.coderbot.iris.gl.state.ValueUpdateNotifier;
+import org.lwjgl.BufferUtils;
+
 import java.nio.FloatBuffer;
 import java.util.function.Supplier;
 
-import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL21;
-
 public class MatrixUniform extends Uniform {
-	private FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
+	private final FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
 	private Matrix4f cachedValue;
 	private final Supplier<Matrix4f> value;
 
@@ -19,8 +20,23 @@ public class MatrixUniform extends Uniform {
 		this.value = value;
 	}
 
+	MatrixUniform(int location, Supplier<Matrix4f> value, ValueUpdateNotifier notifier) {
+		super(location, notifier);
+
+		this.cachedValue = null;
+		this.value = value;
+	}
+
 	@Override
 	public void update() {
+		updateValue();
+
+		if (notifier != null) {
+			notifier.setListener(this::updateValue);
+		}
+	}
+
+	public void updateValue() {
 		Matrix4f newValue = value.get();
 
 		if (!newValue.equals(cachedValue)) {
@@ -29,7 +45,7 @@ public class MatrixUniform extends Uniform {
 			cachedValue.store(buffer);
 			buffer.rewind();
 
-			GL21.glUniformMatrix4fv(location, false, buffer);
+			RenderSystem.glUniformMatrix4(location, false, buffer);
 		}
 	}
 }

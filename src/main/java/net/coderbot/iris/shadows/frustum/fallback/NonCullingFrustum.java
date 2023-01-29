@@ -10,8 +10,8 @@ public class NonCullingFrustum extends Frustum {
 	}
 
 	// for Sodium
-	public boolean fastAabbTest(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
-		return true;
+	public int fastAabbTest(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+		return 1;
 	}
 
 	// For Immersive Portals
@@ -22,8 +22,7 @@ public class NonCullingFrustum extends Frustum {
 		return false;
 	}
 
-	@Override
-	public boolean isVisible(AABB aabb) {
+	public boolean isVisible(AABB box) {
 		return true;
 	}
 }

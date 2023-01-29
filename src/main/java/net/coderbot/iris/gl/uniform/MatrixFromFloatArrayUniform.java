@@ -1,14 +1,14 @@
 package net.coderbot.iris.gl.uniform;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL21;
 
 import java.nio.FloatBuffer;
 import java.util.Arrays;
 import java.util.function.Supplier;
 
 public class MatrixFromFloatArrayUniform extends Uniform {
-	private FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
+	private final FloatBuffer buffer = BufferUtils.createFloatBuffer(16);
 	private float[] cachedValue;
 	private final Supplier<float[]> value;
 
@@ -29,7 +29,7 @@ public class MatrixFromFloatArrayUniform extends Uniform {
 			buffer.put(cachedValue);
 			buffer.rewind();
 
-			GL21.glUniformMatrix4fv(location, false, buffer);
+			RenderSystem.glUniformMatrix4(location, false, buffer);
 		}
 	}
 }

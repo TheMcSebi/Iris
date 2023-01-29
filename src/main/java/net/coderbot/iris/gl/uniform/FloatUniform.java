@@ -1,6 +1,7 @@
 package net.coderbot.iris.gl.uniform;
 
-import org.lwjgl.opengl.GL21;
+import net.coderbot.iris.gl.IrisRenderSystem;
+import net.coderbot.iris.gl.state.ValueUpdateNotifier;
 
 public class FloatUniform extends Uniform {
 	private float cachedValue;
@@ -31,7 +32,7 @@ public class FloatUniform extends Uniform {
 
 		if (cachedValue != newValue) {
 			cachedValue = newValue;
-			GL21.glUniform1f(location, newValue);
+			IrisRenderSystem.uniform1f(location, newValue);
 		}
 	}
 }

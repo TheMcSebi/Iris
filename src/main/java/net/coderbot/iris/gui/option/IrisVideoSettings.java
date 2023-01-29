@@ -6,7 +6,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.ProgressOption;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.TranslatableComponent;
-
 import java.io.IOException;
 
 public class IrisVideoSettings {
@@ -17,22 +16,17 @@ public class IrisVideoSettings {
 	private static final Component ENABLED_TOOLTIP = new TranslatableComponent("options.iris.shadowDistance.enabled");
 
 	public static int getOverriddenShadowDistance(int base) {
-		WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipeline();
-
-		if (pipeline != null) {
-			return pipeline.getForcedShadowRenderDistanceChunksForDisplay().orElse(base);
-		} else {
-			return base;
-		}
+		return Iris.getPipelineManager().getPipeline()
+				.map(pipeline -> pipeline.getForcedShadowRenderDistanceChunksForDisplay().orElse(base))
+				.orElse(base);
 	}
 
 	public static boolean isShadowDistanceSliderEnabled() {
-		WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipeline();
-
-		return pipeline == null || !pipeline.getForcedShadowRenderDistanceChunksForDisplay().isPresent();
+		return Iris.getPipelineManager().getPipeline()
+				.map(pipeline -> !pipeline.getForcedShadowRenderDistanceChunksForDisplay().isPresent())
+				.orElse(true);
 	}
 
-	// TODO: Add a Sodium video settings button too.
 	public static final ProgressOption RENDER_DISTANCE = new ShadowDistanceOption("options.iris.shadowDistance", 0.0D, 32.0D, 1.0F, (gameOptions) -> {
 		return (double) getOverriddenShadowDistance(shadowDistance);
 	}, (gameOptions, viewDistance) -> {
@@ -46,13 +40,25 @@ public class IrisVideoSettings {
 	}, (gameOptions, option) -> {
 		int d = (int) option.get(gameOptions);
 
-		WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipeline();
+		WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
+
+		if (pipeline != null) {
+			d = pipeline.getForcedShadowRenderDistanceChunksForDisplay().orElse(d);
+		}
+
+		if (d <= 0.0) {
+			return new TranslatableComponent("options.generic_value", new TranslatableComponent("options.iris.shadowDistance"), "0 (disabled)");
+		} else {
+			return new TranslatableComponent("options.generic_value",
+					new TranslatableComponent("options.iris.shadowDistance"),
+					new TranslatableComponent("options.chunks", d));
+		}
+	}, client -> {
+		WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
 
 		Component tooltip;
 
 		if (pipeline != null) {
-			d = pipeline.getForcedShadowRenderDistanceChunksForDisplay().orElse(d);
-
 			if (pipeline.getForcedShadowRenderDistanceChunksForDisplay().isPresent()) {
 				tooltip = DISABLED_TOOLTIP;
 			} else {
@@ -62,14 +68,6 @@ public class IrisVideoSettings {
 			tooltip = ENABLED_TOOLTIP;
 		}
 
-		option.setTooltip(Minecraft.getInstance().font.split(tooltip, 200));
-
-		if (d <= 0.0) {
-			return new TranslatableComponent("options.generic_value", new TranslatableComponent("options.iris.shadowDistance"), "0 (disabled)");
-		} else {
-			return new TranslatableComponent("options.generic_value",
-					new TranslatableComponent("options.iris.shadowDistance"),
-					new TranslatableComponent("options.chunks", d));
-		}
+		return Minecraft.getInstance().font.split(tooltip, 200);
 	});
 }

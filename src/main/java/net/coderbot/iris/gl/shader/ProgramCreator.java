@@ -2,35 +2,51 @@
 
 package net.coderbot.iris.gl.shader;
 
+import com.mojang.blaze3d.platform.GlStateManager;
+import net.coderbot.iris.gl.GLDebug;
+import net.coderbot.iris.gl.IrisRenderSystem;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.lwjgl.opengl.GL20C;
+import org.lwjgl.opengl.KHRDebug;
 
 public class ProgramCreator {
 	private static final Logger LOGGER = LogManager.getLogger(ProgramCreator.class);
 
 	public static int create(String name, GlShader... shaders) {
-		int program = GL20C.glCreateProgram();
+		int program = GlStateManager.glCreateProgram();
 
 		// TODO: This is *really* hardcoded, we need to refactor this to support external calls
 		// to glBindAttribLocation
-		GL20C.glBindAttribLocation(program, 10, "mc_Entity");
-		GL20C.glBindAttribLocation(program, 11, "mc_midTexCoord");
-		GL20C.glBindAttribLocation(program, 12, "at_tangent");
+		GlStateManager._glBindAttribLocation(program, 11, "mc_Entity");
+		GlStateManager._glBindAttribLocation(program, 12, "mc_midTexCoord");
+		GlStateManager._glBindAttribLocation(program, 13, "at_tangent");
+		GlStateManager._glBindAttribLocation(program, 14, "at_midBlock");
+
+		// TODO: more hardcoding for 1.17
+		GlStateManager._glBindAttribLocation(program, 0, "Position");
+		GlStateManager._glBindAttribLocation(program, 1, "UV0");
 
 		for (GlShader shader : shaders) {
-			GL20C.glAttachShader(program, shader.getHandle());
+			GlStateManager.glAttachShader(program, shader.getHandle());
 		}
 
-		GL20C.glLinkProgram(program);
+		GlStateManager.glLinkProgram(program);
 
-		String log = GL20C.glGetProgramInfoLog(program);
+		GLDebug.nameObject(KHRDebug.GL_PROGRAM, program, name);
+
+		//Always detach shaders according to https://www.khronos.org/opengl/wiki/Shader_Compilation#Cleanup
+        for (GlShader shader : shaders) {
+            IrisRenderSystem.detachShader(program, shader.getHandle());
+        }
+
+		String log = IrisRenderSystem.getProgramInfoLog(program);
 
 		if (!log.isEmpty()) {
 			LOGGER.warn("Program link log for " + name + ": " + log);
 		}
 
-		int result = GL20C.glGetProgrami(program, GL20C.GL_LINK_STATUS);
+		int result = GlStateManager.glGetProgrami(program, GL20C.GL_LINK_STATUS);
 
 		if (result != GL20C.GL_TRUE) {
 			throw new RuntimeException("Shader program linking failed, see log for details");

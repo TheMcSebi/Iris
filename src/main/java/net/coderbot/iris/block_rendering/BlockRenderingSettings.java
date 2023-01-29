@@ -1,23 +1,35 @@
 package net.coderbot.iris.block_rendering;
 
-import net.coderbot.iris.shaderpack.IdMap;
+import it.unimi.dsi.fastutil.objects.Object2IntFunction;
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
+import net.coderbot.iris.shaderpack.materialmap.NamespacedId;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.Map;
 
 public class BlockRenderingSettings {
 	public static final BlockRenderingSettings INSTANCE = new BlockRenderingSettings();
 
 	private boolean reloadRequired;
-	private IdMap idMap;
+	private Object2IntMap<BlockState> blockStateIds;
+	private Map<Block, RenderType> blockTypeIds;
+	private Object2IntFunction<NamespacedId> entityIds;
 	private float ambientOcclusionLevel;
 	private boolean disableDirectionalShading;
 	private boolean useSeparateAo;
+	private boolean useExtendedVertexFormat;
 
 	public BlockRenderingSettings() {
 		reloadRequired = false;
-		idMap = null;
+		blockStateIds = null;
+		blockTypeIds = null;
 		ambientOcclusionLevel = 1.0F;
 		disableDirectionalShading = false;
 		useSeparateAo = false;
+		useExtendedVertexFormat = false;
 	}
 
 	public boolean isReloadRequired() {
@@ -29,17 +41,42 @@ public class BlockRenderingSettings {
 	}
 
 	@Nullable
-	public IdMap getIdMap() {
-		return idMap;
+	public Object2IntMap<BlockState> getBlockStateIds() {
+		return blockStateIds;
 	}
 
-	public void setIdMap(IdMap idMap) {
-		if (this.idMap != null && this.idMap.equals(idMap)) {
+	@Nullable
+	public Map<Block, RenderType> getBlockTypeIds() {
+		return blockTypeIds;
+	}
+
+	// TODO (coderbot): This doesn't belong here. But I couldn't think of a nicer place to put it.
+	@Nullable
+	public Object2IntFunction<NamespacedId> getEntityIds() {
+		return entityIds;
+	}
+
+	public void setBlockStateIds(Object2IntMap<BlockState> blockStateIds) {
+		if (this.blockStateIds != null && this.blockStateIds.equals(blockStateIds)) {
 			return;
 		}
 
 		this.reloadRequired = true;
-		this.idMap = idMap;
+		this.blockStateIds = blockStateIds;
+	}
+
+	public void setBlockTypeIds(Map<Block, RenderType> blockTypeIds) {
+		if (this.blockTypeIds != null && this.blockTypeIds.equals(blockTypeIds)) {
+			return;
+		}
+
+		this.reloadRequired = true;
+		this.blockTypeIds = blockTypeIds;
+	}
+
+	public void setEntityIds(Object2IntFunction<NamespacedId> entityIds) {
+		// note: no reload needed, entities are rebuilt every frame.
+		this.entityIds = entityIds;
 	}
 
 	public float getAmbientOcclusionLevel() {
@@ -79,5 +116,18 @@ public class BlockRenderingSettings {
 
 		this.reloadRequired = true;
 		this.useSeparateAo = useSeparateAo;
+	}
+
+	public boolean shouldUseExtendedVertexFormat() {
+		return useExtendedVertexFormat;
+	}
+
+	public void setUseExtendedVertexFormat(boolean useExtendedVertexFormat) {
+		if (useExtendedVertexFormat == this.useExtendedVertexFormat) {
+			return;
+		}
+
+		this.reloadRequired = true;
+		this.useExtendedVertexFormat = useExtendedVertexFormat;
 	}
 }

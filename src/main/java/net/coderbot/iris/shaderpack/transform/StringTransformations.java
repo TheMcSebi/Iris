@@ -30,10 +30,9 @@ public class StringTransformations implements Transformations {
 			return;
 		}
 
-		// We need to make a best effort avoid injecting non-preprocessor code fragments before #extension
-		// declarations.
-		//
-		// Some strict drivers (like Mesa drivers) really do not like this.
+		// We need to avoid injecting non-preprocessor code fragments before #extension
+		// declarations. Luckily, JCPP hoists #extension directives to be right after #version
+		// directives.
 		StringBuilder extensions = new StringBuilder();
 		StringBuilder body = new StringBuilder();
 
@@ -43,9 +42,8 @@ public class StringTransformations implements Transformations {
 			String trimmedLine = line.trim();
 
 			if (!trimmedLine.isEmpty()
-					&& !trimmedLine.startsWith("#extension")
-					&& !trimmedLine.startsWith("#define")
-					&& !trimmedLine.startsWith("//")) {
+				&& !trimmedLine.startsWith("#extension")
+				&& !trimmedLine.startsWith("//")) {
 				inBody = true;
 			}
 
@@ -80,7 +78,7 @@ public class StringTransformations implements Transformations {
 	@Override
 	public void define(String key, String value) {
 		// TODO: This isn't super efficient, but oh well.
-		extensions = "#define " + key + " " + value + "\n" + extensions;
+		extensions = extensions + "#define " + key + " " + value + "\n";
 	}
 
 	@Override
@@ -90,7 +88,7 @@ public class StringTransformations implements Transformations {
 			injections.append('\n');
 		} else if (at == InjectionPoint.DEFINES) {
 			// TODO: This isn't super efficient, but oh well.
-			extensions = line + "\n" + extensions;
+			extensions = extensions + line + "\n";
 		} else if (at == InjectionPoint.END) {
 			suffix.append(line);
 			suffix.append('\n');
@@ -112,6 +110,15 @@ public class StringTransformations implements Transformations {
 		injections = new StringBuilder(injections.toString().replace(from, to));
 		body = body.replace(from, to);
 		suffix = new StringBuilder(suffix.toString().replace(from, to));
+	}
+
+	@Override
+	public void replaceRegex(String regex, String to) {
+		prefix = prefix.replaceAll(regex, to);
+		extensions = extensions.replaceAll(regex, to);
+		injections = new StringBuilder(injections.toString().replaceAll(regex, to));
+		body = body.replaceAll(regex, to);
+		suffix = new StringBuilder(suffix.toString().replaceAll(regex, to));
 	}
 
 	@Override

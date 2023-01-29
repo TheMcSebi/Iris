@@ -1,10 +1,12 @@
 package net.coderbot.iris.gl.uniform;
 
-import com.mojang.math.Vector3f;
-import com.mojang.math.Vector4f;
+import net.coderbot.iris.gl.IrisRenderSystem;
+import net.coderbot.iris.gl.state.ValueUpdateNotifier;
+import net.coderbot.iris.vendored.joml.Vector3d;
+import net.coderbot.iris.vendored.joml.Vector3f;
+import net.coderbot.iris.vendored.joml.Vector4f;
+
 import java.util.function.Supplier;
-import net.minecraft.world.phys.Vec3;
-import org.lwjgl.opengl.GL21;
 
 public class Vector3Uniform extends Uniform {
 	private final Vector3f cachedValue;
@@ -17,11 +19,18 @@ public class Vector3Uniform extends Uniform {
 		this.value = value;
 	}
 
-	static Vector3Uniform converted(int location, Supplier<Vec3> value) {
+	Vector3Uniform(int location, Supplier<Vector3f> value, ValueUpdateNotifier notifier) {
+		super(location, notifier);
+
+		this.cachedValue = new Vector3f();
+		this.value = value;
+	}
+
+	static Vector3Uniform converted(int location, Supplier<Vector3d> value) {
 		Vector3f held = new Vector3f();
 
 		return new Vector3Uniform(location, () -> {
-			Vec3 updated = value.get();
+			Vector3d updated = value.get();
 
 			held.set((float) updated.x, (float) updated.y, (float) updated.z);
 
@@ -43,11 +52,19 @@ public class Vector3Uniform extends Uniform {
 
 	@Override
 	public void update() {
+		updateValue();
+
+		if (notifier != null) {
+			notifier.setListener(this::updateValue);
+		}
+	}
+
+	private void updateValue() {
 		Vector3f newValue = value.get();
 
 		if (!newValue.equals(cachedValue)) {
 			cachedValue.set(newValue.x(), newValue.y(), newValue.z());
-			GL21.glUniform3f(location, cachedValue.x(), cachedValue.y(), cachedValue.z());
+			IrisRenderSystem.uniform3f(location, cachedValue.x(), cachedValue.y(), cachedValue.z());
 		}
 	}
 }

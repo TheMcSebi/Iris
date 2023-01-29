@@ -1,217 +1,330 @@
 package net.coderbot.iris.pipeline;
 
-import java.util.Optional;
-import java.util.function.IntFunction;
-
-import net.coderbot.iris.Iris;
-import net.coderbot.iris.IrisLogging;
-import net.coderbot.iris.gl.program.ProgramBuilder;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.primitives.Ints;
+import me.jellysquid.mods.sodium.client.gl.shader.ShaderLoader;
+import me.jellysquid.mods.sodium.client.model.vertex.type.ChunkVertexType;
+import net.coderbot.iris.gl.blending.AlphaTest;
+import net.coderbot.iris.gl.blending.BlendModeOverride;
+import net.coderbot.iris.gl.blending.BufferBlendOverride;
+import net.coderbot.iris.gl.framebuffer.GlFramebuffer;
+import net.coderbot.iris.gl.program.ProgramImages;
 import net.coderbot.iris.gl.program.ProgramSamplers;
 import net.coderbot.iris.gl.program.ProgramUniforms;
+import net.coderbot.iris.pipeline.newshader.AlphaTests;
+import net.coderbot.iris.pipeline.newshader.FogMode;
+import net.coderbot.iris.pipeline.newshader.ShaderAttributeInputs;
+import net.coderbot.iris.pipeline.transform.PatchShaderType;
+import net.coderbot.iris.pipeline.transform.TransformPatcher;
+import net.coderbot.iris.rendertarget.RenderTargets;
 import net.coderbot.iris.shaderpack.ProgramSet;
 import net.coderbot.iris.shaderpack.ProgramSource;
-import net.coderbot.iris.shaderpack.transform.BuiltinUniformReplacementTransformer;
-import net.coderbot.iris.shaderpack.transform.StringTransformations;
-import net.coderbot.iris.shaderpack.transform.Transformations;
+import net.coderbot.iris.shaderpack.loading.ProgramId;
 import net.coderbot.iris.uniforms.CommonUniforms;
-import net.coderbot.iris.uniforms.SamplerUniforms;
 import net.coderbot.iris.uniforms.builtin.BuiltinReplacementUniforms;
+import net.minecraft.resources.ResourceLocation;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.IntFunction;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import net.coderbot.iris.uniforms.custom.CustomUniforms;
 
 public class SodiumTerrainPipeline {
-	String terrainVertex;
-	String terrainGeometry;
-	String terrainFragment;
-	String translucentVertex;
-	String translucentGeometry;
-	String translucentFragment;
-	String shadowVertex;
-	String shadowGeometry;
-	String shadowFragment;
-	//GlFramebuffer framebuffer;
+	Optional<String> terrainVertex;
+	Optional<String> terrainGeometry;
+	Optional<String> terrainFragment;
+	Optional<String> terrainCutoutFragment;
+	GlFramebuffer terrainFramebuffer;
+	BlendModeOverride terrainBlendOverride;
+	List<BufferBlendOverride> terrainBufferOverrides;
+	Optional<AlphaTest> terrainCutoutAlpha;
+
+	Optional<String> translucentVertex;
+	Optional<String> translucentGeometry;
+	Optional<String> translucentFragment;
+	GlFramebuffer translucentFramebuffer;
+	BlendModeOverride translucentBlendOverride;
+	List<BufferBlendOverride> translucentBufferOverrides;
+	Optional<AlphaTest> translucentAlpha;
+
+	Optional<String> shadowVertex;
+	Optional<String> shadowGeometry;
+	Optional<String> shadowFragment;
+	Optional<String> shadowCutoutFragment;
+	GlFramebuffer shadowFramebuffer;
+	BlendModeOverride shadowBlendOverride = BlendModeOverride.OFF;
+	List<BufferBlendOverride> shadowBufferOverrides;
+	Optional<AlphaTest> shadowAlpha;
+
 	ProgramSet programSet;
+
+	private final WorldRenderingPipeline parent;
+	private final CustomUniforms customUniforms;
 
 	private final IntFunction<ProgramSamplers> createTerrainSamplers;
 	private final IntFunction<ProgramSamplers> createShadowSamplers;
 
-	public SodiumTerrainPipeline(ProgramSet programSet, IntFunction<ProgramSamplers> createTerrainSamplers,
-								 IntFunction<ProgramSamplers> createShadowSamplers) {
+	private final IntFunction<ProgramImages> createTerrainImages;
+	private final IntFunction<ProgramImages> createShadowImages;
+
+	public SodiumTerrainPipeline(WorldRenderingPipeline parent, ProgramSet programSet, IntFunction<ProgramSamplers> createTerrainSamplers,
+								 IntFunction<ProgramSamplers> createShadowSamplers, IntFunction<ProgramImages> createTerrainImages, IntFunction<ProgramImages> createShadowImages,
+								 RenderTargets targets,
+								 ImmutableSet<Integer> flippedAfterPrepare,
+								 ImmutableSet<Integer> flippedAfterTranslucent, GlFramebuffer shadowFramebuffer, CustomUniforms customUniforms) {
+		this.parent = Objects.requireNonNull(parent);
+		this.customUniforms = customUniforms;
+
 		Optional<ProgramSource> terrainSource = first(programSet.getGbuffersTerrain(), programSet.getGbuffersTexturedLit(), programSet.getGbuffersTextured(), programSet.getGbuffersBasic());
 		Optional<ProgramSource> translucentSource = first(programSet.getGbuffersWater(), terrainSource);
-		Optional<ProgramSource> shadowSource = programSet.getShadow();
 
 		this.programSet = programSet;
+		this.shadowFramebuffer = shadowFramebuffer;
 
-		terrainSource.ifPresent(sources -> {
-			terrainVertex = sources.getVertexSource().orElse(null);
-			terrainGeometry = sources.getGeometrySource().orElse(null);
-			terrainFragment = sources.getFragmentSource().orElse(null);
-		});
+		terrainSource.ifPresent(sources -> terrainFramebuffer = targets.createGbufferFramebuffer(flippedAfterPrepare,
+				sources.getDirectives().getDrawBuffers()));
 
-		translucentSource.ifPresent(sources -> {
-			translucentVertex = sources.getVertexSource().orElse(null);
-			translucentGeometry = sources.getGeometrySource().orElse(null);
-			translucentFragment = sources.getFragmentSource().orElse(null);
-		});
+		translucentSource.ifPresent(sources -> translucentFramebuffer = targets.createGbufferFramebuffer(flippedAfterTranslucent,
+				sources.getDirectives().getDrawBuffers()));
 
-		shadowSource.ifPresent(sources -> {
-			shadowVertex = sources.getVertexSource().orElse(null);
-			shadowGeometry = sources.getGeometrySource().orElse(null);
-			shadowFragment = sources.getFragmentSource().orElse(null);
-		});
-
-		if (terrainVertex != null) {
-			terrainVertex = transformVertexShader(terrainVertex);
+		if (terrainFramebuffer == null) {
+			terrainFramebuffer = targets.createGbufferFramebuffer(flippedAfterPrepare, new int[] {0});
 		}
 
-		if (translucentVertex != null) {
-			translucentVertex = transformVertexShader(translucentVertex);
-		}
-
-		if (shadowVertex != null) {
-			shadowVertex = transformVertexShader(shadowVertex);
-		}
-
-		if (terrainFragment != null) {
-			terrainFragment = transformFragmentShader(terrainFragment);
-		}
-
-		if (translucentFragment != null) {
-			translucentFragment = transformFragmentShader(translucentFragment);
-		}
-
-		if (shadowFragment != null) {
-			shadowFragment = transformFragmentShader(shadowFragment);
+		if (translucentFramebuffer == null) {
+			translucentFramebuffer = targets.createGbufferFramebuffer(flippedAfterTranslucent, new int[] {0});
 		}
 
 		this.createTerrainSamplers = createTerrainSamplers;
 		this.createShadowSamplers = createShadowSamplers;
+		this.createTerrainImages = createTerrainImages;
+		this.createShadowImages = createShadowImages;
 	}
 
-	private static String transformVertexShader(String base) {
-		StringTransformations transformations = new StringTransformations(base);
+	private static final Supplier<Optional<AlphaTest>> terrainCutoutDefault = () -> Optional.of(AlphaTests.ONE_TENTH_ALPHA);
+	private static final Supplier<Optional<AlphaTest>> translucentDefault = () -> Optional.of(AlphaTest.ALWAYS);
+	private static final Supplier<Optional<AlphaTest>> shadowDefault = () -> Optional.of(AlphaTests.NON_ZERO_ALPHA);
 
-		String injections = "attribute vec3 a_Pos; // The position of the vertex\n" +
-			"attribute vec4 a_Color; // The color of the vertex\n" +
-			"attribute vec2 a_TexCoord; // The block texture coordinate of the vertex\n" +
-			"attribute vec2 a_LightCoord; // The light map texture coordinate of the vertex\n" +
-			"attribute vec3 a_Normal; // The vertex normal\n" +
-			"uniform mat4 u_ModelViewMatrix;\n" +
-			"uniform mat4 u_ModelViewProjectionMatrix;\n" +
-			"uniform mat4 u_NormalMatrix;\n" +
-			"uniform vec3 u_ModelScale;\n" +
-			"uniform vec2 u_TextureScale;\n" +
-			"\n" +
-			"// The model translation for this draw call.\n" +
-			"attribute vec4 d_ModelOffset;\n" +
-			"\n" +
-			"vec4 ftransform() { return gl_ModelViewProjectionMatrix * gl_Vertex; }";
+	public void patchShaders(ChunkVertexType vertexType) {
+		ShaderAttributeInputs inputs = new ShaderAttributeInputs(true, true, false, true, true);
 
-		transformations.injectLine(Transformations.InjectionPoint.BEFORE_CODE, injections);
+		Optional<ProgramSource> terrainSource = first(programSet.getGbuffersTerrain(), programSet.getGbuffersTexturedLit(), programSet.getGbuffersTextured(), programSet.getGbuffersBasic());
+		Optional<ProgramSource> translucentSource = first(programSet.getGbuffersWater(), terrainSource);
 
-		// NB: This is needed on macOS or else the driver will refuse to compile most packs making use of these
-		// constants.
-		ProgramBuilder.MACRO_CONSTANTS.getDefineStrings().forEach(defineString ->
-			transformations.injectLine(Transformations.InjectionPoint.DEFINES, defineString + "\n"));
 
-		transformations.define("gl_Vertex", "vec4((a_Pos * u_ModelScale) + d_ModelOffset.xyz, 1.0)");
-		// transformations.replaceExact("gl_MultiTexCoord1.xy/255.0", "a_LightCoord");
-		transformations.define("gl_MultiTexCoord0", "vec4(a_TexCoord * u_TextureScale, 0.0, 1.0)");
-		//transformations.replaceExact("gl_MultiTexCoord1", "vec4(a_LightCoord * 255.0, 0.0, 1.0)");
-		transformations.define("gl_Color", "a_Color");
-		transformations.define("gl_ModelViewMatrix", "u_ModelViewMatrix");
-		transformations.define("gl_ModelViewProjectionMatrix", "u_ModelViewProjectionMatrix");
-		transformations.replaceExact("gl_TextureMatrix[0]", "mat4(1.0)");
-		// transformations.replaceExact("gl_TextureMatrix[1]", "mat4(1.0 / 255.0)");
-		transformations.define("gl_NormalMatrix", "mat3(u_NormalMatrix)");
-		transformations.define("gl_Normal", "a_Normal");
-		// Just being careful
-		transformations.define("ftransform", "iris_ftransform");
+		terrainSource.ifPresentOrElse(sources -> {
+			terrainBlendOverride = sources.getDirectives().getBlendModeOverride().orElse(ProgramId.Terrain.getBlendModeOverride());
+			terrainBufferOverrides = new ArrayList<>();
+			sources.getDirectives().getBufferBlendOverrides().forEach(information -> {
+				int index = Ints.indexOf(sources.getDirectives().getDrawBuffers(), information.getIndex());
+				if (index > -1) {
+					terrainBufferOverrides.add(new BufferBlendOverride(index, information.getBlendMode()));
+				}
+			});
+			terrainCutoutAlpha = sources.getDirectives().getAlphaTestOverride().or(terrainCutoutDefault);
 
-		new BuiltinUniformReplacementTransformer("a_LightCoord").apply(transformations);
+			Map<PatchShaderType, String> transformed = TransformPatcher.patchSodium(
+				sources.getVertexSource().orElse(null),
+				sources.getGeometrySource().orElse(null),
+				sources.getFragmentSource().orElse(null),
+				terrainCutoutAlpha.get(), AlphaTest.ALWAYS, inputs,
+				vertexType.getPositionScale(), vertexType.getPositionOffset(), vertexType.getTextureScale(), parent.getTextureMap());
+			terrainVertex = Optional.ofNullable(transformed.get(PatchShaderType.VERTEX));
+			terrainGeometry = Optional.ofNullable(transformed.get(PatchShaderType.GEOMETRY));
+			terrainCutoutFragment = Optional.ofNullable(transformed.get(PatchShaderType.FRAGMENT_CUTOUT));
+			terrainFragment = Optional.ofNullable(transformed.get(PatchShaderType.FRAGMENT));
 
-		if (IrisLogging.ENABLE_SPAM) {
-			System.out.println("Final patched vertex source:");
-			System.out.println(transformations);
-		}
+			PatchedShaderPrinter.debugPatchedShaders(sources.getName() + "_sodium", terrainVertex.orElse(null), terrainGeometry.orElse(null), terrainFragment.orElse(null));
+			PatchedShaderPrinter.debugPatchedShaders(sources.getName() + "_sodium_cutout", null, null, terrainCutoutFragment.orElse(null));
+		}, () -> {
+			terrainBlendOverride = null;
+			terrainBufferOverrides = Collections.emptyList();
+			terrainCutoutAlpha = terrainCutoutDefault.get();
+			terrainVertex = Optional.empty();
+			terrainGeometry = Optional.empty();
+			terrainCutoutFragment = Optional.empty();
+			terrainFragment = Optional.empty();
+		});
 
-		return transformations.toString();
-	}
 
-	private static String transformFragmentShader(String base) {
-		StringTransformations transformations = new StringTransformations(base);
+		translucentSource.ifPresentOrElse(sources -> {
+			translucentBlendOverride = sources.getDirectives().getBlendModeOverride().orElse(ProgramId.Water.getBlendModeOverride());
+			translucentBufferOverrides = new ArrayList<>();
+			sources.getDirectives().getBufferBlendOverrides().forEach(information -> {
+				int index = Ints.indexOf(sources.getDirectives().getDrawBuffers(), information.getIndex());
+				if (index > -1) {
+					translucentBufferOverrides.add(new BufferBlendOverride(index, information.getBlendMode()));
+				}
+			});
+			translucentAlpha = sources.getDirectives().getAlphaTestOverride().or(translucentDefault);
 
-		String injections =
-				"uniform mat4 u_ModelViewMatrix;\n" +
-				"uniform mat4 u_ModelViewProjectionMatrix;\n" +
-				"uniform mat4 u_NormalMatrix;\n";
+			Map<PatchShaderType, String> transformed = TransformPatcher.patchSodium(
+				sources.getVertexSource().orElse(null),
+				sources.getGeometrySource().orElse(null),
+				sources.getFragmentSource().orElse(null),
+				null, translucentAlpha.get(), inputs,
+				vertexType.getPositionScale(), vertexType.getPositionOffset(), vertexType.getTextureScale(), parent.getTextureMap());
+			translucentVertex = Optional.ofNullable(transformed.get(PatchShaderType.VERTEX));
+			translucentGeometry = Optional.ofNullable(transformed.get(PatchShaderType.GEOMETRY));
+			translucentFragment = Optional.ofNullable(transformed.get(PatchShaderType.FRAGMENT));
 
-		transformations.define("gl_ModelViewMatrix", "u_ModelViewMatrix");
-		transformations.define("gl_ModelViewProjectionMatrix", "u_ModelViewProjectionMatrix");
-		transformations.replaceExact("gl_TextureMatrix[0]", "mat4(1.0)");
-		transformations.define("gl_NormalMatrix", "mat3(u_NormalMatrix)");
+			PatchedShaderPrinter.debugPatchedShaders(sources.getName() + "_sodium", translucentVertex.orElse(null), translucentGeometry.orElse(null), translucentFragment.orElse(null));
+		}, () -> {
+			translucentBlendOverride = null;
+			translucentBufferOverrides = Collections.emptyList();
+			translucentAlpha = translucentDefault.get();
+			translucentVertex = Optional.empty();
+			translucentGeometry = Optional.empty();
+			translucentFragment = Optional.empty();
+		});
 
-		transformations.injectLine(Transformations.InjectionPoint.BEFORE_CODE, injections);
+		programSet.getShadow().ifPresentOrElse(sources -> {
+			shadowBlendOverride = sources.getDirectives().getBlendModeOverride().orElse(ProgramId.Shadow.getBlendModeOverride());
+			shadowBufferOverrides = new ArrayList<>();
+			sources.getDirectives().getBufferBlendOverrides().forEach(information -> {
+				int index = Ints.indexOf(sources.getDirectives().getDrawBuffers(), information.getIndex());
+				if (index > -1) {
+					shadowBufferOverrides.add(new BufferBlendOverride(index, information.getBlendMode()));
+				}
+			});
+			shadowAlpha = sources.getDirectives().getAlphaTestOverride().or(shadowDefault);
 
-		// NB: This is needed on macOS or else the driver will refuse to compile most packs making use of these
-		// constants.
-		ProgramBuilder.MACRO_CONSTANTS.getDefineStrings().forEach(defineString ->
-				transformations.injectLine(Transformations.InjectionPoint.DEFINES, defineString + "\n"));
+			Map<PatchShaderType, String> transformed = TransformPatcher.patchSodium(
+				sources.getVertexSource().orElse(null),
+				sources.getGeometrySource().orElse(null),
+				sources.getFragmentSource().orElse(null),
+				shadowAlpha.get(), AlphaTest.ALWAYS, inputs,
+				vertexType.getPositionScale(), vertexType.getPositionOffset(), vertexType.getTextureScale(), parent.getTextureMap());
+			shadowVertex = Optional.ofNullable(transformed.get(PatchShaderType.VERTEX));
+			shadowGeometry = Optional.ofNullable(transformed.get(PatchShaderType.GEOMETRY));
+			shadowCutoutFragment = Optional.ofNullable(transformed.get(PatchShaderType.FRAGMENT_CUTOUT));
+			shadowFragment = Optional.ofNullable(transformed.get(PatchShaderType.FRAGMENT));
 
-		if (IrisLogging.ENABLE_SPAM) {
-			System.out.println("Final patched fragment source:");
-			System.out.println(transformations);
-		}
-
-		return transformations.toString();
+			PatchedShaderPrinter.debugPatchedShaders(sources.getName() + "_sodium", shadowVertex.orElse(null), shadowGeometry.orElse(null), shadowFragment.orElse(null));
+			PatchedShaderPrinter.debugPatchedShaders(sources.getName() + "_sodium_cutout", null, null, shadowCutoutFragment.orElse(null));
+		}, () -> {
+			shadowBlendOverride = null;
+			shadowBufferOverrides = Collections.emptyList();
+			shadowAlpha = shadowDefault.get();
+			shadowVertex = Optional.empty();
+			shadowGeometry = Optional.empty();
+			shadowCutoutFragment = Optional.empty();
+			shadowFragment = Optional.empty();
+		});
 	}
 
 	public Optional<String> getTerrainVertexShaderSource() {
-		return Optional.ofNullable(terrainVertex);
+		return terrainVertex;
 	}
 
 	public Optional<String> getTerrainGeometryShaderSource() {
-		return Optional.ofNullable(terrainGeometry);
+		return terrainGeometry;
 	}
 
 	public Optional<String> getTerrainFragmentShaderSource() {
-		return Optional.ofNullable(terrainFragment);
+		return terrainFragment;
+	}
+
+	public Optional<String> getTerrainCutoutFragmentShaderSource() {
+		return terrainCutoutFragment;
+	}
+
+	public GlFramebuffer getTerrainFramebuffer() {
+		return terrainFramebuffer;
+	}
+
+	public BlendModeOverride getTerrainBlendOverride() {
+		return terrainBlendOverride;
+	}
+
+	public List<BufferBlendOverride> getTerrainBufferOverrides() {
+		return terrainBufferOverrides;
+	}
+
+	public Optional<AlphaTest> getTerrainCutoutAlpha() {
+		return terrainCutoutAlpha;
 	}
 
 	public Optional<String> getTranslucentVertexShaderSource() {
-		return Optional.ofNullable(translucentVertex);
+		return translucentVertex;
 	}
 
 	public Optional<String> getTranslucentGeometryShaderSource() {
-		return Optional.ofNullable(translucentGeometry);
+		return translucentGeometry;
 	}
 
 	public Optional<String> getTranslucentFragmentShaderSource() {
-		return Optional.ofNullable(translucentFragment);
+		return translucentFragment;
+	}
+
+	public GlFramebuffer getTranslucentFramebuffer() {
+		return translucentFramebuffer;
+	}
+
+	public BlendModeOverride getTranslucentBlendOverride() {
+		return translucentBlendOverride;
+	}
+
+	public List<BufferBlendOverride> getTranslucentBufferOverrides() {
+		return translucentBufferOverrides;
+	}
+
+	public Optional<AlphaTest> getTranslucentAlpha() {
+		return translucentAlpha;
 	}
 
 	public Optional<String> getShadowVertexShaderSource() {
-		return Optional.ofNullable(shadowVertex);
+		return shadowVertex;
 	}
 
 	public Optional<String> getShadowGeometryShaderSource() {
-		return Optional.ofNullable(shadowGeometry);
+		return shadowGeometry;
 	}
 
 	public Optional<String> getShadowFragmentShaderSource() {
-		return Optional.ofNullable(shadowFragment);
+		return shadowFragment;
 	}
 
-	public ProgramUniforms initUniforms(int programId) {
+	public Optional<String> getShadowCutoutFragmentShaderSource() {
+		return shadowCutoutFragment;
+	}
+
+	public GlFramebuffer getShadowFramebuffer() {
+		return shadowFramebuffer;
+	}
+
+	public BlendModeOverride getShadowBlendOverride() {
+		return shadowBlendOverride;
+	}
+
+	public List<BufferBlendOverride> getShadowBufferOverrides() {
+		return shadowBufferOverrides;
+	}
+
+	public Optional<AlphaTest> getShadowAlpha() {
+		return shadowAlpha;
+	}
+
+	public ProgramUniforms.Builder initUniforms(int programId) {
 		ProgramUniforms.Builder uniforms = ProgramUniforms.builder("<sodium shaders>", programId);
 
-		WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipeline();
-		CommonUniforms.addCommonUniforms(uniforms, programSet.getPack().getIdMap(), programSet.getPackDirectives(), ((DeferredWorldRenderingPipeline) pipeline).getUpdateNotifier());
-		SamplerUniforms.addCommonSamplerUniforms(uniforms);
-		SamplerUniforms.addLevelSamplerUniforms(uniforms);
-		SamplerUniforms.addDepthSamplerUniforms(uniforms);
+		CommonUniforms.addDynamicUniforms(uniforms, FogMode.PER_VERTEX);
+		customUniforms.assignTo(uniforms);
+
 		BuiltinReplacementUniforms.addBuiltinReplacementUniforms(uniforms);
 
-		return uniforms.buildUniforms();
+		return uniforms;
+	}
+
+	public boolean hasShadowPass() {
+		return createShadowSamplers != null;
 	}
 
 	public ProgramSamplers initTerrainSamplers(int programId) {
@@ -220,6 +333,18 @@ public class SodiumTerrainPipeline {
 
 	public ProgramSamplers initShadowSamplers(int programId) {
 		return createShadowSamplers.apply(programId);
+	}
+
+	public ProgramImages initTerrainImages(int programId) {
+		return createTerrainImages.apply(programId);
+	}
+
+	public ProgramImages initShadowImages(int programId) {
+		return createShadowImages.apply(programId);
+	}
+
+	public CustomUniforms getCustomUniforms() {
+		return customUniforms;
 	}
 
 	/*public void bindFramebuffer() {
@@ -239,5 +364,20 @@ public class SodiumTerrainPipeline {
 		}
 
 		return Optional.empty();
+	}
+
+	public static String parseSodiumImport(String shader) {
+		Pattern IMPORT_PATTERN = Pattern.compile("#import <(?<namespace>.*):(?<path>.*)>");
+		Matcher matcher = IMPORT_PATTERN.matcher(shader);
+
+		if (!matcher.matches()) {
+			throw new IllegalArgumentException("Malformed import statement (expected format: " + IMPORT_PATTERN + ")");
+		}
+
+		String namespace = matcher.group("namespace");
+		String path = matcher.group("path");
+
+		ResourceLocation identifier = new ResourceLocation(namespace, path);
+		return ShaderLoader.getShaderSource(identifier);
 	}
 }

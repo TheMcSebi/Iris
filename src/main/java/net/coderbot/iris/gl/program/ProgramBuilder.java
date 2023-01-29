@@ -2,49 +2,39 @@ package net.coderbot.iris.gl.program;
 
 import com.google.common.collect.ImmutableSet;
 import com.mojang.blaze3d.systems.RenderSystem;
+import net.coderbot.iris.gl.IrisRenderSystem;
+import net.coderbot.iris.gl.image.ImageHolder;
 import net.coderbot.iris.gl.sampler.SamplerHolder;
 import net.coderbot.iris.gl.shader.GlShader;
 import net.coderbot.iris.gl.shader.ProgramCreator;
-import net.coderbot.iris.gl.shader.ShaderConstants;
 import net.coderbot.iris.gl.shader.ShaderType;
-import net.coderbot.iris.gl.shader.StandardMacros;
+import net.coderbot.iris.gl.texture.InternalTextureFormat;
+import net.coderbot.iris.gl.state.ValueUpdateNotifier;
+import net.coderbot.iris.gl.texture.TextureType;
 import org.jetbrains.annotations.Nullable;
-import org.lwjgl.opengl.GL20C;
-import org.lwjgl.opengl.GL21C;
 
 import java.util.function.IntSupplier;
 
-public class ProgramBuilder extends ProgramUniforms.Builder implements SamplerHolder {
-	private static final ShaderConstants EMPTY_CONSTANTS = ShaderConstants.builder().build();
-
-	public static final ShaderConstants MACRO_CONSTANTS = ShaderConstants.builder()
-		.define(StandardMacros.getOsString())
-		.define("MC_VERSION", StandardMacros.getMcVersion())
-		.define("MC_GL_VERSION", StandardMacros.getGlVersion(GL20C.GL_VERSION))
-		.define("MC_GLSL_VERSION", StandardMacros.getGlVersion(GL20C.GL_SHADING_LANGUAGE_VERSION))
-		.define(StandardMacros.getRenderer())
-		.define(StandardMacros.getVendor())
-		.defineAll(StandardMacros.getIrisDefines())
-		.defineAll(StandardMacros.getGlExtensions())
-		.build();
-
+public class ProgramBuilder extends ProgramUniforms.Builder implements SamplerHolder, ImageHolder {
 	private final int program;
 	private final ProgramSamplers.Builder samplers;
+	private final ProgramImages.Builder images;
 
 	private ProgramBuilder(String name, int program, ImmutableSet<Integer> reservedTextureUnits) {
 		super(name, program);
 
 		this.program = program;
 		this.samplers = ProgramSamplers.builder(program, reservedTextureUnits);
+		this.images = ProgramImages.builder(program);
 	}
 
 	public void bindAttributeLocation(int index, String name) {
-		GL21C.glBindAttribLocation(program, index, name);
+		IrisRenderSystem.bindAttributeLocation(program, index, name);
 	}
 
 	public static ProgramBuilder begin(String name, @Nullable String vertexSource, @Nullable String geometrySource,
 									   @Nullable String fragmentSource, ImmutableSet<Integer> reservedTextureUnits) {
-		RenderSystem.assertThread(RenderSystem::isOnRenderThread);
+		RenderSystem.assertOnRenderThread();
 
 		GlShader vertex;
 		GlShader geometry;
@@ -79,13 +69,33 @@ public class ProgramBuilder extends ProgramUniforms.Builder implements SamplerHo
 		return new ProgramBuilder(name, programId, reservedTextureUnits);
 	}
 
+	public static ProgramBuilder beginCompute(String name, @Nullable String source, ImmutableSet<Integer> reservedTextureUnits) {
+		RenderSystem.assertOnRenderThread();
+
+		if (!IrisRenderSystem.supportsCompute()) {
+			throw new IllegalStateException("This PC does not support compute shaders, but it's attempting to be used???");
+		}
+
+		GlShader compute = buildShader(ShaderType.COMPUTE, name + ".csh", source);
+
+		int programId = ProgramCreator.create(name, compute);
+
+		compute.destroy();
+
+		return new ProgramBuilder(name, programId, reservedTextureUnits);
+	}
+
 	public Program build() {
-		return new Program(program, super.buildUniforms(), this.samplers.build());
+		return new Program(program, super.buildUniforms(), this.samplers.build(), this.images.build());
+	}
+
+	public ComputeProgram buildCompute() {
+		return new ComputeProgram(program, super.buildUniforms(), this.samplers.build(), this.images.build());
 	}
 
 	private static GlShader buildShader(ShaderType shaderType, String name, @Nullable String source) {
 		try {
-			return new GlShader(shaderType, name, source, MACRO_CONSTANTS);
+			return new GlShader(shaderType, name, source);
 		} catch (RuntimeException e) {
 			throw new RuntimeException("Failed to compile " + shaderType + " shader for program " + name, e);
 		}
@@ -102,12 +112,36 @@ public class ProgramBuilder extends ProgramUniforms.Builder implements SamplerHo
 	}
 
 	@Override
-	public boolean addDefaultSampler(IntSupplier sampler, Runnable postBind, String... names) {
-		return samplers.addDefaultSampler(sampler, postBind, names);
+	public boolean addDefaultSampler(IntSupplier sampler, String... names) {
+		return samplers.addDefaultSampler(sampler, names);
 	}
 
 	@Override
-	public boolean addDynamicSampler(IntSupplier sampler, Runnable postBind, String... names) {
-		return samplers.addDynamicSampler(sampler, postBind, names);
+	public boolean addDynamicSampler(IntSupplier sampler, String... names) {
+		return samplers.addDynamicSampler(sampler, names);
+	}
+
+	@Override
+	public boolean addDynamicSampler(TextureType type, IntSupplier sampler, String... names) {
+		return samplers.addDynamicSampler(type, sampler, names);
+	}
+
+	public boolean addDynamicSampler(IntSupplier sampler, ValueUpdateNotifier notifier, String... names) {
+		return samplers.addDynamicSampler(sampler, notifier, names);
+	}
+
+	@Override
+	public boolean addDynamicSampler(TextureType type, IntSupplier sampler, ValueUpdateNotifier notifier, String... names) {
+		return samplers.addDynamicSampler(type, sampler, notifier, names);
+	}
+
+	@Override
+	public boolean hasImage(String name) {
+		return images.hasImage(name);
+	}
+
+	@Override
+	public void addTextureImage(IntSupplier textureID, InternalTextureFormat internalFormat, String name) {
+		images.addTextureImage(textureID, internalFormat, name);
 	}
 }

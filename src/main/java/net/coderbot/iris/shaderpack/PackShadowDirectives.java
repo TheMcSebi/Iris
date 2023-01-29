@@ -1,6 +1,11 @@
 package net.coderbot.iris.shaderpack;
 
 import com.google.common.collect.ImmutableList;
+import net.coderbot.iris.Iris;
+import net.coderbot.iris.gl.texture.InternalTextureFormat;
+import net.coderbot.iris.vendored.joml.Vector4f;
+
+import java.util.Optional;
 
 public class PackShadowDirectives {
 	// Bump this up if you want more shadow color buffers!
@@ -8,18 +13,28 @@ public class PackShadowDirectives {
 	// TODO: Make this configurable?
 	public static final int MAX_SHADOW_COLOR_BUFFERS = 2;
 
+	private final OptionalBoolean shadowEnabled;
+
 	private int resolution;
 	// Use a boxed form so we can use null to indicate that there is not an FOV specified.
 	private Float fov;
 	private float distance;
 	private float distanceRenderMul;
+	private float entityShadowDistanceMul;
 	private boolean explicitRenderDistance;
 	private float intervalSize;
+
+	private final boolean shouldRenderTerrain;
+	private final boolean shouldRenderTranslucent;
+	private final boolean shouldRenderEntities;
+	private final boolean shouldRenderPlayer;
+	private final boolean shouldRenderBlockEntities;
+	private final OptionalBoolean cullingState;
 
 	private final ImmutableList<DepthSamplingSettings> depthSamplingSettings;
 	private final ImmutableList<SamplingSettings> colorSamplingSettings;
 
-	public PackShadowDirectives() {
+	public PackShadowDirectives(ShaderProperties properties) {
 		// By default, the shadow map has a resolution of 1024x1024. It's recommended to increase this for better
 		// quality.
 		this.resolution = 1024;
@@ -50,12 +65,21 @@ public class PackShadowDirectives {
 		// whether or not shadows can possibly be cast into the player's view, instead of just checking
 		// the shadow matrices.
 		this.distanceRenderMul = -1.0f;
+		this.entityShadowDistanceMul = 1.0f;
 		this.explicitRenderDistance = false;
 
 		// By default, a shadow interval size of 2 meters is used. This means that the shadow camera will be snapped to
 		// a grid where each grid cell is 2 meters by 2 meters by 2 meters, and it will only move either when the sun /
 		// moon move, or when the player camera moves into a different grid cell.
 		this.intervalSize = 2.0f;
+
+		this.shouldRenderTerrain = properties.getShadowTerrain().orElse(true);
+		this.shouldRenderTranslucent = properties.getShadowTranslucent().orElse(true);
+		this.shouldRenderEntities = properties.getShadowEntities().orElse(true);
+		this.shouldRenderPlayer = properties.getShadowPlayer().orElse(false);
+		this.shouldRenderBlockEntities = properties.getShadowBlockEntities().orElse(true);
+		this.cullingState = properties.getShadowCulling();
+		this.shadowEnabled = properties.getShadowEnabled();
 
 		this.depthSamplingSettings = ImmutableList.of(new DepthSamplingSettings(), new DepthSamplingSettings());
 
@@ -66,6 +90,25 @@ public class PackShadowDirectives {
 		}
 
 		this.colorSamplingSettings = colorSamplingSettings.build();
+	}
+
+	public PackShadowDirectives(PackShadowDirectives shadowDirectives) {
+		this.resolution = shadowDirectives.resolution;
+		this.fov = shadowDirectives.fov;
+		this.distance = shadowDirectives.distance;
+		this.distanceRenderMul = shadowDirectives.distanceRenderMul;
+		this.entityShadowDistanceMul = shadowDirectives.entityShadowDistanceMul;
+		this.explicitRenderDistance = shadowDirectives.explicitRenderDistance;
+		this.intervalSize = shadowDirectives.intervalSize;
+		this.shouldRenderTerrain = shadowDirectives.shouldRenderTerrain;
+		this.shouldRenderTranslucent = shadowDirectives.shouldRenderTranslucent;
+		this.shouldRenderEntities = shadowDirectives.shouldRenderEntities;
+		this.shouldRenderPlayer = shadowDirectives.shouldRenderPlayer;
+		this.shouldRenderBlockEntities = shadowDirectives.shouldRenderBlockEntities;
+		this.cullingState = shadowDirectives.cullingState;
+		this.depthSamplingSettings = shadowDirectives.depthSamplingSettings;
+		this.colorSamplingSettings = shadowDirectives.colorSamplingSettings;
+		this.shadowEnabled = shadowDirectives.shadowEnabled;
 	}
 
 	public int getResolution() {
@@ -84,12 +127,44 @@ public class PackShadowDirectives {
 		return distanceRenderMul;
 	}
 
+	public float getEntityShadowDistanceMul() {
+		return entityShadowDistanceMul;
+	}
+
 	public boolean isDistanceRenderMulExplicit() {
 		return explicitRenderDistance;
 	}
 
 	public float getIntervalSize() {
 		return intervalSize;
+	}
+
+	public boolean shouldRenderTerrain() {
+		return shouldRenderTerrain;
+	}
+
+	public boolean shouldRenderTranslucent() {
+		return shouldRenderTranslucent;
+	}
+
+	public boolean shouldRenderEntities() {
+		return shouldRenderEntities;
+	}
+
+	public boolean shouldRenderPlayer() {
+		return shouldRenderPlayer;
+	}
+
+	public boolean shouldRenderBlockEntities() {
+		return shouldRenderBlockEntities;
+	}
+
+	public OptionalBoolean getCullingState() {
+		return cullingState;
+	}
+
+	public OptionalBoolean isShadowEnabled() {
+		return shadowEnabled;
 	}
 
 	public ImmutableList<DepthSamplingSettings> getDepthSamplingSettings() {
@@ -110,6 +185,8 @@ public class PackShadowDirectives {
 		directives.acceptCommentFloatDirective("SHADOWHPL", distance -> this.distance = distance);
 		directives.acceptConstFloatDirective("shadowDistance", distance -> this.distance = distance);
 
+		directives.acceptConstFloatDirective("entityShadowDistanceMul", distance -> this.entityShadowDistanceMul = distance);
+
 		directives.acceptConstFloatDirective("shadowDistanceRenderMul", distanceRenderMul -> {
 			this.distanceRenderMul = distanceRenderMul;
 			this.explicitRenderDistance = true;
@@ -123,6 +200,7 @@ public class PackShadowDirectives {
 		acceptColorMipmapSettings(directives, colorSamplingSettings);
 		acceptDepthFilteringSettings(directives, depthSamplingSettings);
 		acceptColorFilteringSettings(directives, colorSamplingSettings);
+		acceptBufferDirectives(directives, colorSamplingSettings);
 	}
 
 	/**
@@ -217,6 +295,33 @@ public class PackShadowDirectives {
 		}
 	}
 
+	private void acceptBufferDirectives(DirectiveHolder directives, ImmutableList<SamplingSettings> settings) {
+		for (int i = 0; i < settings.size(); i++) {
+			String bufferName = "shadowcolor" + i;
+			int finalI = i;
+			directives.acceptConstStringDirective(bufferName + "Format", format -> {
+				Optional<InternalTextureFormat> internalFormat = InternalTextureFormat.fromString(format);
+
+				if (internalFormat.isPresent()) {
+					settings.get(finalI).setFormat(internalFormat.get());
+				} else {
+					Iris.logger.warn("Unrecognized internal texture format " + format + " specified for " + bufferName + "Format, ignoring.");
+				}
+			});
+
+			// TODO: Only for composite and deferred
+			directives.acceptConstBooleanDirective(bufferName + "Clear",
+				shouldClear -> settings.get(finalI).setClear(shouldClear));
+
+			// TODO: Only for composite, deferred, and final
+
+			// Note: This is still relevant even if shouldClear is false,
+			// since this will be the initial color of the buffer.
+			directives.acceptConstVec4Directive(bufferName + "ClearColor",
+				clearColor -> settings.get(finalI).setClearColor(clearColor));
+		}
+	}
+
 	@Override
 	public String toString() {
 		return "PackShadowDirectives{" +
@@ -224,6 +329,7 @@ public class PackShadowDirectives {
 				", fov=" + fov +
 				", distance=" + distance +
 				", distanceRenderMul=" + distanceRenderMul +
+				", entityDistanceRenderMul=" + entityShadowDistanceMul +
 				", intervalSize=" + intervalSize +
 				", depthSamplingSettings=" + depthSamplingSettings +
 				", colorSamplingSettings=" + colorSamplingSettings +
@@ -242,9 +348,27 @@ public class PackShadowDirectives {
 		 */
 		private boolean nearest;
 
+		/**
+		 * Whether to clear the buffer every frame.
+		 */
+		private boolean clear;
+
+		/**
+		 * The color to clear the buffer to. If {@code clear} is false, this has no effect.
+		 */
+		private Vector4f clearColor;
+
+		/**
+		 * The internal format to use for the color buffer.
+		 */
+		private InternalTextureFormat format;
+
 		public SamplingSettings() {
 			mipmap = false;
 			nearest = false;
+			clear = true;
+			clearColor = new Vector4f(1.0F);
+			format = InternalTextureFormat.RGBA;
 		}
 
 		protected void setMipmap(boolean mipmap) {
@@ -255,6 +379,18 @@ public class PackShadowDirectives {
 			this.nearest = nearest;
 		}
 
+		protected void setClear(boolean clear) {
+			this.clear = clear;
+		}
+
+		protected void setClearColor(Vector4f clearColor) {
+			this.clearColor = clearColor;
+		}
+
+		protected void setFormat(InternalTextureFormat format) {
+			this.format = format;
+		}
+
 		public boolean getMipmap() {
 			return this.mipmap;
 		}
@@ -263,11 +399,26 @@ public class PackShadowDirectives {
 			return this.nearest;
 		}
 
+		public boolean getClear() {
+			return clear;
+		}
+
+		public Vector4f getClearColor() {
+			return clearColor;
+		}
+
+		public InternalTextureFormat getFormat() {
+			return this.format;
+		}
+
 		@Override
 		public String toString() {
 			return "SamplingSettings{" +
 					"mipmap=" + mipmap +
 					", nearest=" + nearest +
+					", clear=" + clear +
+					", clearColor=" + clearColor +
+					", format=" + format.name() +
 					'}';
 		}
 	}

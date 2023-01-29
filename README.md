@@ -7,6 +7,13 @@
 * **Visit [our website](https://irisshaders.net) for downloads and pretty screenshots!**
 * Visit [our Discord server](https://discord.gg/jQJnav2jPu) to chat about the mod and get support! It's also a great place to get development updates right as they're happening.
 * Visit [my Patreon page](https://www.patreon.com/coderbot) to support the continued development of Iris!
+* Visit [the developer documentation](https://github.com/IrisShaders/Iris/tree/trunk/docs/development) for information on developing, building, and contributing to Iris!
+
+## FAQ
+
+- Find answers to frequently asked questions on our [FAQ page](docs/faq.md).
+- A list of known-supported shaderpacks is available [here](docs/supportedshaders.md).
+- A list of unfixable limitations in Iris is available [here](docs/usage/limitations.md).
 
 
 ## Why did you make Iris?
@@ -33,36 +40,14 @@ These are the goals of Iris. Since Iris isn't yet complete, it hasn't fully achi
 
 ## What's the current state of development?
 
-Iris has public releases for 1.16 and 1.17 that work with custom versions of Sodium. Iris has made a lot of progress, but it is still not complete software. Though it is already usable for many people, and generally provides a big performance boost over alternatives, there is still much to be done before Iris can be a complete replacement for OptiFine's shaders features. As Iris continues its development, it will only become more and more complete with time.
+Iris has public releases for 1.16.5, 1.17.1, 1.18.2, and 1.19 that work with the official releases of Sodium. Iris has made a lot of progress, but it is still not complete software. Though it is already usable for many people, and generally provides a big performance boost over alternatives, there is still much to be done before Iris can be a complete replacement for OptiFine's shaders features. As Iris continues its development, it will only become more and more complete with time.
 
-Compatibility with Sodium is an ongoing project. I've been chatting with JellySquid over the course of many months regarding compatibility, and many refactors and improvements have been implemented into Sodium in order to better accommodate Iris. Though a [fork of Sodium](https://github.com/IrisShaders/sodium-fabric) is still required, it's my intent that it will be unnecessary in the future. Official downloads of Iris include this modified version of Sodium for performance.
-
-
-## What shader packs can I use right now?
-
-The following shader packs mostly work, though with a few bugs of course:
-
-* [Sildur's Vibrant Shaders](https://sildurs-shaders.github.io/)
-* [Complementary Shaders](https://www.curseforge.com/minecraft/customization/complementary-shaders)
-* [BSL Shaders](https://www.bitslablab.com/bslshaders/)
-* [Sildur's Enhanced Default](https://sildurs-shaders.github.io/)
-    * Enchantment glints are broken
-* [SEUS Renewed](https://sonicether.com/shaders/download/renewed-v1-0-1/)
-    * Note that SEUS Renewed does not work on some platforms and might fail to compile.
-* [SEUS v11](https://sonicether.com/shaders/download/v11-0/) (from 2016, not to be confused with SEUS PTGI E11)
-    * General issues with weather
-    * Note that SEUS v11 does not work on some platforms and might fail to compile.
-* [Skylec Shader](https://www.curseforge.com/minecraft/customization/skylec-shader) - a very lightweight shaderpack that pulls off some neat effects
-    * Underwater is broken
-    * Weather is broken
-* [XorDev's shaderpacks](https://github.com/XorDev/Minecraft-Shaderpacks)
-
-Other shaderpacks aren't officially supported currently.
+Compatibility with Sodium is an ongoing project. I've been chatting with JellySquid over the course of many months regarding compatibility, and many refactors and improvements have been implemented into Sodium in order to better accommodate Iris.
 
 
 ## How can I help?
 
-* The Iris Discord server is looking for people willing to provide support and moderate the server! Send @IMS#7902 a message if you'd like to apply.
+* The Iris Discord server is looking for people willing to provide support and moderate the server! Go to #applications on our server if you'd like to apply.
 * Code review on open PRs is appreciated! This helps get important issues with PRs resolved before I give them a look.
 * Code contributions through PRs are also welcome! If you're working on a large / significant feature it's usually a good idea to talk about your plans beforehand, to make sure that work isn't wasted.
 
@@ -71,7 +56,7 @@ Other shaderpacks aren't officially supported currently.
 
 Iris doesn't support Forge. This is for a few reasons:
 
-* My time is limited, and properly supporting all the mods available for Forge (as well as Forge itself) is a huge amount of work. When people ask for Forge support, they aren't asking just for Iris to run on Forge, they are also asking for it to be compatible out of the box with their kitchen sink modpack that contains over 300 mods. As a result, properly supporting Forge would require me to divert large amounts precious time into fixing tedious compatibility issues and bugs, time that could instead be spent making the Fabric version of Iris better.
+* My time is limited, and properly supporting all the mods available for Forge (as well as Forge itself) is a huge amount of work. When people ask for Forge support, they aren't asking just for Iris to run on Forge, they are also asking for it to be compatible out of the box with their kitchen sink modpack that contains over 300 mods. As a result, properly supporting Forge would require me to divert large amounts of precious time into fixing tedious compatibility issues and bugs, time that could instead be spent making the Fabric version of Iris better.
 * The Forge toolchain isn't really designed to play nice with mods like Iris that need to make many patches to the game code. It's possible, but Fabric & Quilt are just *better* for mods like Iris. It's no coincidence that the emergence of Fabric and the initial emergence of OptiFine replacements happened at around the same time.
 * Sodium, which Iris depends on to achieve its great performance, has no official Forge version. It's a long story, but in short: the lead developers of Forge were incredibly hostile to JellySquid when she developed for Forge, and since then have made no credible attempts to repair relations or even admit wrongdoing.
 
@@ -93,6 +78,8 @@ So, if you want to distribute a Forge port of Iris, we'd prefer if you let us kn
 
 ## License
 
-Iris is completely free and open source, and you are free to read, distribute, and modify the code as long as you abide by the (fairly reasonable) terms of the [GNU LGPLv3 license](https://github.com/IrisShaders/Iris/blob/master/LICENSE).
+All code in this (Iris) repository is completely free and open source, and you are free to read, distribute, and modify the code as long as you abide by the (fairly reasonable) terms of the [GNU LGPLv3 license](https://github.com/IrisShaders/Iris/blob/master/LICENSE).
+
+Dependencies may not be under an applicable license: See the [Incompatible Dependencies](https://github.com/IrisShaders/Iris/blob/master/LICENSE-DEPENDENCIES) page for more information.
 
 Though it's not legally required, I'd appreciate it if you could ask before hosting your own public downloads for compiled versions of Iris. Though if you want to add the mod to a site like MCBBS, that's fine, no need to ask me.

@@ -1,110 +1,218 @@
 package net.coderbot.iris.rendertarget;
 
+import com.google.common.collect.ImmutableSet;
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.coderbot.iris.gl.IrisRenderSystem;
+import net.coderbot.iris.gl.framebuffer.GlFramebuffer;
+import net.coderbot.iris.gl.texture.DepthBufferFormat;
+import net.coderbot.iris.gl.texture.DepthCopyStrategy;
+import net.coderbot.iris.shaderpack.PackDirectives;
+import net.coderbot.iris.shaderpack.PackRenderTargetDirectives;
+import net.coderbot.iris.vendored.joml.Vector2i;
+import org.lwjgl.opengl.GL20C;
+import org.lwjgl.opengl.GL30C;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-import com.google.common.collect.ImmutableSet;
-import com.mojang.blaze3d.systems.RenderSystem;
-import net.coderbot.iris.gl.framebuffer.GlFramebuffer;
-
-import net.coderbot.iris.shaderpack.PackRenderTargetDirectives;
-import net.minecraft.client.Minecraft;
-import org.lwjgl.opengl.GL20C;
-
 public class RenderTargets {
-	/**
-	 * The maximum number of render targets supported by Iris.
-	 */
-	public static int MAX_RENDER_TARGETS = 8;
-
 	private final RenderTarget[] targets;
-	private final DepthTexture depthTexture;
+	private int currentDepthTexture;
+	private DepthBufferFormat currentDepthFormat;
+
 	private final DepthTexture noTranslucents;
+	private final DepthTexture noHand;
+	private final GlFramebuffer depthSourceFb;
+	private final GlFramebuffer noTranslucentsDestFb;
+	private final GlFramebuffer noHandDestFb;
+	private DepthCopyStrategy copyStrategy;
 
 	private final List<GlFramebuffer> ownedFramebuffers;
 
 	private int cachedWidth;
 	private int cachedHeight;
+	private boolean fullClearRequired;
+	private boolean translucentDepthDirty;
+	private boolean handDepthDirty;
 
-	public RenderTargets(com.mojang.blaze3d.pipeline.RenderTarget reference, PackRenderTargetDirectives directives) {
-		this(reference.width, reference.height, directives.getRenderTargetSettings());
-	}
+	private int cachedDepthBufferVersion;
+	private boolean destroyed;
 
-	public RenderTargets(int width, int height, Map<Integer, PackRenderTargetDirectives.RenderTargetSettings> renderTargets) {
-		targets = new net.coderbot.iris.rendertarget.RenderTarget[MAX_RENDER_TARGETS];
+	public RenderTargets(int width, int height, int depthTexture, int depthBufferVersion, DepthBufferFormat depthFormat, Map<Integer, PackRenderTargetDirectives.RenderTargetSettings> renderTargets, PackDirectives packDirectives) {
+		targets = new RenderTarget[renderTargets.size()];
 
 		renderTargets.forEach((index, settings) -> {
-			// TODO: Handle render targets above 8
 			// TODO: Handle mipmapping?
-			targets[index] = net.coderbot.iris.rendertarget.RenderTarget.builder().setDimensions(width, height).setInternalFormat(settings.getRequestedFormat()).build();
+			Vector2i dimensions = packDirectives.getTextureScaleOverride(index, width, height);
+			targets[index] = RenderTarget.builder().setDimensions(dimensions.x, dimensions.y)
+					.setInternalFormat(settings.getInternalFormat())
+					.setPixelFormat(settings.getInternalFormat().getPixelFormat()).build();
 		});
 
-		this.depthTexture = new DepthTexture(width, height);
-		this.noTranslucents = new DepthTexture(width, height);
+		this.currentDepthTexture = depthTexture;
+		this.currentDepthFormat = depthFormat;
+		this.copyStrategy = DepthCopyStrategy.fastest(currentDepthFormat.isCombinedStencil());
 
 		this.cachedWidth = width;
 		this.cachedHeight = height;
+		this.cachedDepthBufferVersion = depthBufferVersion;
 
 		this.ownedFramebuffers = new ArrayList<>();
 
 		// NB: Make sure all buffers are cleared so that they don't contain undefined
 		// data. Otherwise very weird things can happen.
-		//
-		// TODO: Make this respect the clear color of each buffer, destroy these framebuffers afterwards.
-		RenderSystem.clearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		fullClearRequired = true;
 
-		createFramebufferWritingToMain(new int[] {0,1,2,3,4,5,6,7}).bind();
-		RenderSystem.clear(GL20C.GL_COLOR_BUFFER_BIT, false);
+		this.depthSourceFb = createFramebufferWritingToMain(new int[] {0});
 
-		createFramebufferWritingToAlt(new int[] {0,1,2,3,4,5,6,7}).bind();
-		RenderSystem.clear(GL20C.GL_COLOR_BUFFER_BIT, false);
+		this.noTranslucents = new DepthTexture(width, height, currentDepthFormat);
+		this.noHand = new DepthTexture(width, height, currentDepthFormat);
 
-		// Make sure to rebind the vanilla framebuffer.
-		Minecraft.getInstance().getMainRenderTarget().bindWrite(false);
+		this.noTranslucentsDestFb = createFramebufferWritingToMain(new int[] {0});
+		this.noTranslucentsDestFb.addDepthAttachment(this.noTranslucents.getTextureId());
+
+		this.noHandDestFb = createFramebufferWritingToMain(new int[] {0});
+		this.noHandDestFb.addDepthAttachment(this.noHand.getTextureId());
+
+		this.translucentDepthDirty = true;
+		this.handDepthDirty = true;
 	}
 
 	public void destroy() {
+		destroyed = true;
+
 		for (GlFramebuffer owned : ownedFramebuffers) {
 			owned.destroy();
 		}
 
-		for (net.coderbot.iris.rendertarget.RenderTarget target : targets) {
+		for (RenderTarget target : targets) {
 			target.destroy();
 		}
 
-		depthTexture.destroy();
 		noTranslucents.destroy();
+		noHand.destroy();
 	}
 
-	public net.coderbot.iris.rendertarget.RenderTarget get(int index) {
+	public int getRenderTargetCount() {
+		return targets.length;
+	}
+
+	public RenderTarget get(int index) {
+		if (destroyed) {
+			throw new IllegalStateException("Tried to use destroyed RenderTargets");
+		}
+
 		return targets[index];
 	}
 
-	public DepthTexture getDepthTexture() {
-		return depthTexture;
+	public int getDepthTexture() {
+		return currentDepthTexture;
 	}
 
 	public DepthTexture getDepthTextureNoTranslucents() {
+		if (destroyed) {
+			throw new IllegalStateException("Tried to use destroyed RenderTargets");
+		}
+
 		return noTranslucents;
 	}
 
-	public void resizeIfNeeded(int newWidth, int newHeight) {
-		if (newWidth == cachedWidth && newHeight == cachedHeight) {
-			// No resize needed
-			return;
+	public DepthTexture getDepthTextureNoHand() {
+		return noHand;
+	}
+
+	public boolean resizeIfNeeded(int newDepthBufferVersion, int newDepthTextureId, int newWidth, int newHeight, DepthBufferFormat newDepthFormat, PackDirectives packDirectives) {
+		boolean recreateDepth = false;
+		if (cachedDepthBufferVersion != newDepthBufferVersion) {
+			recreateDepth = true;
+			currentDepthTexture = newDepthTextureId;
+			cachedDepthBufferVersion = newDepthBufferVersion;
 		}
 
-		cachedWidth = newWidth;
-		cachedHeight = newHeight;
+		boolean sizeChanged = newWidth != cachedWidth || newHeight != cachedHeight;
+		boolean depthFormatChanged = newDepthFormat != currentDepthFormat;
 
-		for (net.coderbot.iris.rendertarget.RenderTarget target : targets) {
-			target.resize(newWidth, newHeight);
+		if (depthFormatChanged) {
+			currentDepthFormat = newDepthFormat;
+			// Might need a new copy strategy
+			copyStrategy = DepthCopyStrategy.fastest(currentDepthFormat.isCombinedStencil());
 		}
 
-		depthTexture.resize(newWidth, newHeight);
-		noTranslucents.resize(newWidth, newHeight);
+		if (recreateDepth) {
+			// Re-attach the depth textures with the new depth texture ID, since Minecraft re-creates
+			// the depth texture when resizing its render targets.
+			//
+			// I'm not sure if our framebuffers holding on to the old depth texture between frames
+			// could be a concern, in the case of resizing and similar. I think it should work
+			// based on what I've seen of the spec, though - it seems like deleting a texture
+			// automatically detaches it from its framebuffers.
+			for (GlFramebuffer framebuffer : ownedFramebuffers) {
+				if (framebuffer == noHandDestFb || framebuffer == noTranslucentsDestFb) {
+					// NB: Do not change the depth attachment of these framebuffers
+					// as it is intentionally different
+					continue;
+				}
+
+				if (framebuffer.hasDepthAttachment()) {
+					framebuffer.addDepthAttachment(newDepthTextureId);
+				}
+			}
+		}
+
+		if (depthFormatChanged || sizeChanged)  {
+			// Reallocate depth buffers
+			noTranslucents.resize(newWidth, newHeight, newDepthFormat);
+			noHand.resize(newWidth, newHeight, newDepthFormat);
+			this.translucentDepthDirty = true;
+			this.handDepthDirty = true;
+		}
+
+		if (sizeChanged) {
+			cachedWidth = newWidth;
+			cachedHeight = newHeight;
+
+			for (int i = 0; i < targets.length; i++) {
+				targets[i].resize(packDirectives.getTextureScaleOverride(i, newWidth, newHeight));
+			}
+
+			fullClearRequired = true;
+		}
+
+		return sizeChanged;
+	}
+
+	public void copyPreTranslucentDepth() {
+		if (translucentDepthDirty) {
+			translucentDepthDirty = false;
+			RenderSystem.bindTexture(noTranslucents.getTextureId());
+			depthSourceFb.bindAsReadBuffer();
+			IrisRenderSystem.copyTexImage2D(GL20C.GL_TEXTURE_2D, 0, currentDepthFormat.getGlInternalFormat(), 0, 0, cachedWidth, cachedHeight, 0);
+		} else {
+			copyStrategy.copy(depthSourceFb, getDepthTexture(), noTranslucentsDestFb, noTranslucents.getTextureId(),
+				getCurrentWidth(), getCurrentHeight());
+		}
+	}
+
+	public void copyPreHandDepth() {
+		if (handDepthDirty) {
+			handDepthDirty = false;
+			RenderSystem.bindTexture(noHand.getTextureId());
+			depthSourceFb.bindAsReadBuffer();
+			IrisRenderSystem.copyTexImage2D(GL20C.GL_TEXTURE_2D, 0, currentDepthFormat.getGlInternalFormat(), 0, 0, cachedWidth, cachedHeight, 0);
+		} else {
+			copyStrategy.copy(depthSourceFb, getDepthTexture(), noHandDestFb, noHand.getTextureId(),
+				getCurrentWidth(), getCurrentHeight());
+		}
+	}
+
+	public boolean isFullClearRequired() {
+		return fullClearRequired;
+	}
+
+	public void onFullClear() {
+		fullClearRequired = false;
 	}
 
 	public GlFramebuffer createFramebufferWritingToMain(int[] drawBuffers) {
@@ -115,61 +223,121 @@ public class RenderTargets {
 		return createFullFramebuffer(true, drawBuffers);
 	}
 
-	public GlFramebuffer createGbufferFramebuffer(ImmutableSet<Integer> flipped, int[] drawBuffers) {
-		boolean[] stageWritesToAlt = new boolean[RenderTargets.MAX_RENDER_TARGETS];
+	public GlFramebuffer createClearFramebuffer(boolean alt, int[] clearBuffers) {
+		ImmutableSet<Integer> stageWritesToMain = ImmutableSet.of();
 
-		flipped.forEach(index -> stageWritesToAlt[index] = true);
+		if (!alt) {
+			stageWritesToMain = invert(ImmutableSet.of(), clearBuffers);
+		}
 
-		GlFramebuffer framebuffer =  createColorFramebuffer(stageWritesToAlt, drawBuffers);
+		return createColorFramebuffer(stageWritesToMain, clearBuffers);
+	}
 
-		framebuffer.addDepthAttachment(this.getDepthTexture().getTextureId());
+	private ImmutableSet<Integer> invert(ImmutableSet<Integer> base, int[] relevant) {
+		ImmutableSet.Builder<Integer> inverted = ImmutableSet.builder();
+
+		for (int i : relevant) {
+			if (!base.contains(i)) {
+				inverted.add(i);
+			}
+		}
+
+		return inverted.build();
+	}
+
+	private GlFramebuffer createEmptyFramebuffer() {
+		GlFramebuffer framebuffer = new GlFramebuffer();
+		ownedFramebuffers.add(framebuffer);
+
+		framebuffer.addDepthAttachment(currentDepthTexture);
+
+		// NB: Before OpenGL 3.0, all framebuffers are required to have a color
+		// attachment no matter what.
+		framebuffer.addColorAttachment(0, get(0).getMainTexture());
+		framebuffer.noDrawBuffers();
+
+		return framebuffer;
+	}
+
+	public GlFramebuffer createGbufferFramebuffer(ImmutableSet<Integer> stageWritesToAlt, int[] drawBuffers) {
+		if (drawBuffers.length == 0) {
+			return createEmptyFramebuffer();
+		}
+
+		ImmutableSet<Integer> stageWritesToMain = invert(stageWritesToAlt, drawBuffers);
+
+		GlFramebuffer framebuffer =  createColorFramebuffer(stageWritesToMain, drawBuffers);
+
+		framebuffer.addDepthAttachment(currentDepthTexture);
 
 		return framebuffer;
 	}
 
 	private GlFramebuffer createFullFramebuffer(boolean clearsAlt, int[] drawBuffers) {
-		boolean[] stageWritesToAlt = new boolean[RenderTargets.MAX_RENDER_TARGETS];
+		if (drawBuffers.length == 0) {
+			return createEmptyFramebuffer();
+		}
 
-		Arrays.fill(stageWritesToAlt, clearsAlt);
+		ImmutableSet<Integer> stageWritesToMain = ImmutableSet.of();
 
-		GlFramebuffer framebuffer =  createColorFramebuffer(stageWritesToAlt, drawBuffers);
+		if (!clearsAlt) {
+			stageWritesToMain = invert(ImmutableSet.of(), drawBuffers);
+		}
 
-		framebuffer.addDepthAttachment(this.getDepthTexture().getTextureId());
+		return createColorFramebufferWithDepth(stageWritesToMain, drawBuffers);
+	}
+
+	public GlFramebuffer createColorFramebufferWithDepth(ImmutableSet<Integer> stageWritesToMain, int[] drawBuffers) {
+		GlFramebuffer framebuffer = createColorFramebuffer(stageWritesToMain, drawBuffers);
+
+		framebuffer.addDepthAttachment(currentDepthTexture);
 
 		return framebuffer;
 	}
 
-	public GlFramebuffer createBaselineShadowFramebuffer() {
-		boolean[] stageWritesToAlt = new boolean[2];
+	public GlFramebuffer createColorFramebuffer(ImmutableSet<Integer> stageWritesToMain, int[] drawBuffers) {
+		if (drawBuffers.length == 0) {
+			throw new IllegalArgumentException("Framebuffer must have at least one color buffer");
+		}
 
-		Arrays.fill(stageWritesToAlt, false);
-
-		GlFramebuffer framebuffer =  createColorFramebuffer(stageWritesToAlt, new int[] {0, 1});
-
-		framebuffer.addDepthAttachment(this.getDepthTexture().getTextureId());
-
-		return framebuffer;
-	}
-
-	public GlFramebuffer createColorFramebuffer(boolean[] stageWritesToAlt, int[] drawBuffers) {
 		GlFramebuffer framebuffer = new GlFramebuffer();
 		ownedFramebuffers.add(framebuffer);
 
-		for (int i = 0; i < stageWritesToAlt.length; i++) {
-			net.coderbot.iris.rendertarget.RenderTarget target = this.get(i);
+		int[] actualDrawBuffers = new int[drawBuffers.length];
 
-			int textureId = stageWritesToAlt[i] ? target.getAltTexture() : target.getMainTexture();
+		for (int i = 0; i < drawBuffers.length; i++) {
+			actualDrawBuffers[i] = i;
+
+			if (drawBuffers[i] >= getRenderTargetCount()) {
+				// TODO: This causes resource leaks, also we should really verify this in the shaderpack parser...
+				framebuffer.destroy();
+				ownedFramebuffers.remove(framebuffer);
+				throw new IllegalStateException("Render target with index " + drawBuffers[i] + " is not supported, only "
+						+ getRenderTargetCount() + " render targets are supported.");
+			}
+
+			RenderTarget target = this.get(drawBuffers[i]);
+
+			int textureId = stageWritesToMain.contains(drawBuffers[i]) ? target.getMainTexture() : target.getAltTexture();
 
 			framebuffer.addColorAttachment(i, textureId);
 		}
 
-		if (!framebuffer.isComplete()) {
-			throw new IllegalStateException("Unexpected error while creating framebuffer");
+		framebuffer.drawBuffers(actualDrawBuffers);
+		framebuffer.readBuffer(0);
+
+
+		int status = framebuffer.getStatus();
+		if (status != GL30C.GL_FRAMEBUFFER_COMPLETE) {
+			throw new IllegalStateException("Unexpected error while creating framebuffer: Draw buffers " + Arrays.toString(actualDrawBuffers) + " Status: " + status);
 		}
 
-		framebuffer.drawBuffers(drawBuffers);
-
 		return framebuffer;
+	}
+
+	public void destroyFramebuffer(GlFramebuffer framebuffer) {
+		framebuffer.destroy();
+		ownedFramebuffers.remove(framebuffer);
 	}
 
 	public int getCurrentWidth() {

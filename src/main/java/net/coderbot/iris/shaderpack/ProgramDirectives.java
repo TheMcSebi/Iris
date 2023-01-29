@@ -1,14 +1,24 @@
 package net.coderbot.iris.shaderpack;
 
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
-
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import it.unimi.dsi.fastutil.booleans.BooleanConsumer;
-import net.coderbot.iris.gl.blending.AlphaTestOverride;
+import it.unimi.dsi.fastutil.objects.Object2BooleanMap;
+import it.unimi.dsi.fastutil.objects.Object2BooleanMaps;
+import net.coderbot.iris.Iris;
+import net.coderbot.iris.gl.blending.AlphaTest;
+import net.coderbot.iris.gl.blending.BlendMode;
+import net.coderbot.iris.gl.blending.BlendModeOverride;
+import net.coderbot.iris.gl.blending.BufferBlendInformation;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 public class ProgramDirectives {
 	private static final ImmutableList<String> LEGACY_RENDER_TARGETS = PackRenderTargetDirectives.LEGACY_RENDER_TARGETS;
@@ -16,11 +26,27 @@ public class ProgramDirectives {
 	private final int[] drawBuffers;
 	private final float viewportScale;
 	@Nullable
-	private final AlphaTestOverride alphaTestOverride;
-	private final boolean disableBlend;
-	private final ImmutableSet<Integer> mipmappedBuffers;
+	private final AlphaTest alphaTestOverride;
 
-	ProgramDirectives(ProgramSource source, ShaderProperties properties, Set<Integer> supportedRenderTargets) {
+	private final Optional<BlendModeOverride> blendModeOverride;
+	private final List<BufferBlendInformation> bufferBlendInformations;
+	private final ImmutableSet<Integer> mipmappedBuffers;
+	private final ImmutableMap<Integer, Boolean> explicitFlips;
+
+	private ProgramDirectives(int[] drawBuffers, float viewportScale, @Nullable AlphaTest alphaTestOverride,
+							  Optional<BlendModeOverride> blendModeOverride, List<BufferBlendInformation> bufferBlendInformations, ImmutableSet<Integer> mipmappedBuffers,
+							  ImmutableMap<Integer, Boolean> explicitFlips) {
+		this.drawBuffers = drawBuffers;
+		this.viewportScale = viewportScale;
+		this.alphaTestOverride = alphaTestOverride;
+		this.blendModeOverride = blendModeOverride;
+		this.bufferBlendInformations = bufferBlendInformations;
+		this.mipmappedBuffers = mipmappedBuffers;
+		this.explicitFlips = explicitFlips;
+	}
+
+	ProgramDirectives(ProgramSource source, ShaderProperties properties, Set<Integer> supportedRenderTargets,
+					  @Nullable BlendModeOverride defaultBlendOverride) {
 		// DRAWBUFFERS is only detected in the fragment shader source code (.fsh).
 		// If there's no explicit declaration, then by default /* DRAWBUFFERS:0 */ is inferred.
 		// For SEUS v08 and SEUS v10 to work, this will need to be set to 01234567. However, doing this causes
@@ -28,16 +54,36 @@ public class ProgramDirectives {
 		// undefined data to be written to colortex7.
 		//
 		// TODO: Figure out how to infer the DRAWBUFFERS directive when it is missing.
-		drawBuffers = findDrawbuffersDirective(source.getFragmentSource()).orElse(new int[] { 0 });
+		Optional<CommentDirective> optionalDrawbuffersDirective = findDrawbuffersDirective(source.getFragmentSource());
+		Optional<CommentDirective> optionalRendertargetsDirective = findRendertargetsDirective(source.getFragmentSource());
+
+		Optional<CommentDirective> optionalCommentDirective = getAppliedDirective(optionalDrawbuffersDirective, optionalRendertargetsDirective);
+		drawBuffers = optionalCommentDirective.map(commentDirective -> {
+			if (commentDirective.getType() == CommentDirective.Type.DRAWBUFFERS) {
+				return parseDigits(commentDirective.getDirective().toCharArray());
+			} else if (commentDirective.getType() == CommentDirective.Type.RENDERTARGETS) {
+				return parseDigitList(commentDirective.getDirective());
+			} else {
+				throw new IllegalStateException("Unhandled comment directive type!");
+			}
+		}).orElse(new int[] { 0 });
 
 		if (properties != null) {
 			viewportScale = properties.getViewportScaleOverrides().getOrDefault(source.getName(), 1.0f);
 			alphaTestOverride = properties.getAlphaTestOverrides().get(source.getName());
-			disableBlend = properties.getBlendDisabled().contains(source.getName());
+
+			BlendModeOverride blendModeOverride = properties.getBlendModeOverrides().get(source.getName());
+			List<BufferBlendInformation> bufferBlendInformations = properties.getBufferBlendOverrides().get(source.getName());
+			this.blendModeOverride = Optional.ofNullable(blendModeOverride != null ? blendModeOverride : defaultBlendOverride);
+			this.bufferBlendInformations = bufferBlendInformations != null ? bufferBlendInformations : Collections.emptyList();
+
+			explicitFlips = source.getParent().getPackDirectives().getExplicitFlips(source.getName());
 		} else {
 			viewportScale = 1.0f;
 			alphaTestOverride = null;
-			disableBlend = false;
+			blendModeOverride = Optional.ofNullable(defaultBlendOverride);
+			bufferBlendInformations = Collections.emptyList();
+			explicitFlips = ImmutableMap.of();
 		}
 
 		HashSet<Integer> mipmappedBuffers = new HashSet<>();
@@ -68,11 +114,17 @@ public class ProgramDirectives {
 		this.mipmappedBuffers = ImmutableSet.copyOf(mipmappedBuffers);
 	}
 
-	private static Optional<int[]> findDrawbuffersDirective(Optional<String> stageSource) {
-		return stageSource
-			.flatMap(fragment -> CommentDirectiveParser.findDirective(fragment, "DRAWBUFFERS"))
-			.map(String::toCharArray)
-			.map(ProgramDirectives::parseDigits);
+	public ProgramDirectives withOverriddenDrawBuffers(int[] drawBuffersOverride) {
+		return new ProgramDirectives(drawBuffersOverride, viewportScale, alphaTestOverride, blendModeOverride, bufferBlendInformations,
+			mipmappedBuffers, explicitFlips);
+	}
+
+	private static Optional<CommentDirective> findDrawbuffersDirective(Optional<String> stageSource) {
+		return stageSource.flatMap(fragment -> CommentDirectiveParser.findDirective(fragment, CommentDirective.Type.DRAWBUFFERS));
+	}
+
+	private static Optional<CommentDirective> findRendertargetsDirective(Optional<String> stageSource) {
+		return stageSource.flatMap(fragment -> CommentDirectiveParser.findDirective(fragment, CommentDirective.Type.RENDERTARGETS));
 	}
 
 	private static int[] parseDigits(char[] directiveChars) {
@@ -86,6 +138,28 @@ public class ProgramDirectives {
 		return buffers;
 	}
 
+	private static int[] parseDigitList(String digitListString) {
+		return Arrays.stream(digitListString.split(","))
+				.mapToInt(Integer::parseInt)
+				.toArray();
+	}
+
+	private static Optional<CommentDirective> getAppliedDirective(Optional<CommentDirective> optionalDrawbuffersDirective, Optional<CommentDirective> optionalRendertargetsDirective) {
+		if (optionalDrawbuffersDirective.isPresent() && optionalRendertargetsDirective.isPresent()) {
+			if (optionalDrawbuffersDirective.get().getLocation() > optionalRendertargetsDirective.get().getLocation()) {
+				return optionalDrawbuffersDirective;
+			} else {
+				return optionalRendertargetsDirective;
+			}
+		} else if (optionalDrawbuffersDirective.isPresent()) {
+			return optionalDrawbuffersDirective;
+		} else if (optionalRendertargetsDirective.isPresent()) {
+			return optionalRendertargetsDirective;
+		} else {
+			return Optional.empty();
+		}
+	}
+
 	public int[] getDrawBuffers() {
 		return drawBuffers;
 	}
@@ -94,15 +168,23 @@ public class ProgramDirectives {
 		return viewportScale;
 	}
 
-	public Optional<AlphaTestOverride> getAlphaTestOverride() {
+	public Optional<AlphaTest> getAlphaTestOverride() {
 		return Optional.ofNullable(alphaTestOverride);
 	}
 
-	public boolean shouldDisableBlend() {
-		return disableBlend;
+	public Optional<BlendModeOverride> getBlendModeOverride() {
+		return blendModeOverride;
+	}
+
+	public List<BufferBlendInformation> getBufferBlendOverrides() {
+		return bufferBlendInformations;
 	}
 
 	public ImmutableSet<Integer> getMipmappedBuffers() {
 		return mipmappedBuffers;
+	}
+
+	public ImmutableMap<Integer, Boolean> getExplicitFlips() {
+		return explicitFlips;
 	}
 }

@@ -1,8 +1,9 @@
 package net.coderbot.iris.gl.uniform;
 
-import java.util.function.IntSupplier;
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.coderbot.iris.gl.state.ValueUpdateNotifier;
 
-import org.lwjgl.opengl.GL21;
+import java.util.function.IntSupplier;
 
 public class IntUniform extends Uniform {
 	private int cachedValue;
@@ -33,7 +34,7 @@ public class IntUniform extends Uniform {
 
 		if (cachedValue != newValue) {
 			cachedValue = newValue;
-			GL21.glUniform1i(location, newValue);
+			RenderSystem.glUniform1i(location, newValue);
 		}
 	}
 }

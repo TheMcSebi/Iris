@@ -6,86 +6,94 @@ import net.coderbot.iris.block_rendering.BlockRenderingSettings;
 import net.coderbot.iris.shaderpack.DimensionId;
 import net.coderbot.iris.uniforms.SystemTimeUniforms;
 import net.minecraft.client.Minecraft;
+import org.jetbrains.annotations.Nullable;
 import org.lwjgl.opengl.GL20C;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 
 public class PipelineManager {
 	private static PipelineManager instance;
 	private final Function<DimensionId, WorldRenderingPipeline> pipelineFactory;
-	private WorldRenderingPipeline pipeline;
-	private boolean sodiumShaderReloadNeeded;
-	private DimensionId lastDimension;
+	private final Map<DimensionId, WorldRenderingPipeline> pipelinesPerDimension = new HashMap<>();
+	private WorldRenderingPipeline pipeline = new FixedFunctionWorldRenderingPipeline();
+	private int versionCounterForSodiumShaderReload = 0;
 
 	public PipelineManager(Function<DimensionId, WorldRenderingPipeline> pipelineFactory) {
 		this.pipelineFactory = pipelineFactory;
 	}
 
 	public WorldRenderingPipeline preparePipeline(DimensionId currentDimension) {
-		if (currentDimension != lastDimension) {
-			// TODO: Don't say anything about compiling shaders if shaders are disabled.
-			if (lastDimension == null) {
-				Iris.logger.info("Compiling shaderpack on initial world load (for dimension: " + currentDimension + ")");
-			} else {
-				Iris.logger.info("Recompiling shaderpack on dimension change (" + lastDimension + " -> " + currentDimension + ")");
-			}
-
-			lastDimension = currentDimension;
-			destroyPipeline();
-		}
-
-		if (pipeline == null) {
-			// Ensure that the timers are reset
+		if (!pipelinesPerDimension.containsKey(currentDimension)) {
 			SystemTimeUniforms.COUNTER.reset();
 			SystemTimeUniforms.TIMER.reset();
 
-			pipeline = pipelineFactory.apply(lastDimension);
-			sodiumShaderReloadNeeded = true;
+			Iris.logger.info("Creating pipeline for dimension {}", currentDimension);
+			pipeline = pipelineFactory.apply(currentDimension);
+			pipelinesPerDimension.put(currentDimension, pipeline);
 
-			// If Sodium is loaded, we need to reload the world renderer to properly recreate the ChunkRenderBackend
-			// Otherwise, the terrain shaders won't be changed properly.
-			// We also need to re-render all of the chunks if there is a change in the directional shading setting,
-			// ID mapping, or separateAo setting.
-			//
-			// TODO: Don't trigger a reload if this is the first time the world is being rendered
 			if (BlockRenderingSettings.INSTANCE.isReloadRequired()) {
-				Minecraft.getInstance().levelRenderer.allChanged();
+				if (Minecraft.getInstance().levelRenderer != null) {
+					Minecraft.getInstance().levelRenderer.allChanged();
+				}
+
 				BlockRenderingSettings.INSTANCE.clearReloadRequired();
 			}
-		}
-
-		return pipeline;
-	}
-
-	public WorldRenderingPipeline getPipeline() {
-		return pipeline;
-	}
-
-	public boolean isSodiumShaderReloadNeeded() {
-		return sodiumShaderReloadNeeded;
-	}
-
-	public void clearSodiumShaderReloadNeeded() {
-		sodiumShaderReloadNeeded = false;
-	}
-
-	public void setAsInstance() {
-		if (instance != null) {
-			throw new IllegalStateException("Multiple pipeline managers active at one time");
 		} else {
-			instance = this;
+			pipeline = pipelinesPerDimension.get(currentDimension);
 		}
+
+		return pipeline;
 	}
 
-	public static void resetInstance() {
-		instance = null;
+	@Nullable
+	public WorldRenderingPipeline getPipelineNullable() {
+		return pipeline;
 	}
 
-	public static PipelineManager getInstance() {
-		return instance;
+	public Optional<WorldRenderingPipeline> getPipeline() {
+		return Optional.ofNullable(pipeline);
 	}
 
+	/**
+	 * In IrisChunkProgramOverrides#getProgramOverride,
+	 * it uses version counter to check whether to reload sodium shaders.
+	 * This fixes a compat issue with Immersive Portals(#1188).
+	 * Immersive Portals may load multiple client dimensions at the same time,
+	 * and every dimension corresponds to a IrisChunkProgramOverrides object.
+	 * Multiple dimensions (mod dimensions that fallback to overworld shaders) may use the same pipeline.
+	 * This ensures that the sodium shader for each dimension will get properly reloaded.
+	 */
+	public int getVersionCounterForSodiumShaderReload() {
+		return versionCounterForSodiumShaderReload;
+	}
+
+	/**
+	 * Destroys all the current pipelines.
+	 *
+	 * <p>This method is <b>EXTREMELY DANGEROUS!</b> It is a huge potential source of hard-to-trace inconsistencies
+	 * in program state. You must make sure that you <i>immediately</i> re-prepare the pipeline after destroying
+	 * it to prevent the program from falling into an inconsistent state.</p>
+	 *
+	 * <p>In particular, </p>
+	 *
+	 * @see <a href="https://github.com/IrisShaders/Iris/issues/1330">this GitHub issue</a>
+	 */
 	public void destroyPipeline() {
+		pipelinesPerDimension.forEach((dimensionId, pipeline) -> {
+			Iris.logger.info("Destroying pipeline {}", dimensionId);
+			resetTextureState();
+			pipeline.destroy();
+		});
+
+		pipelinesPerDimension.clear();
+		pipeline = null;
+		versionCounterForSodiumShaderReload++;
+	}
+
+	private void resetTextureState() {
 		// Unbind all textures
 		//
 		// This is necessary because we don't want destroyed render target textures to remain bound to certain texture
@@ -94,22 +102,13 @@ public class PipelineManager {
 		//
 		// Without this code, there will be weird issues when reloading certain shaderpacks.
 		for (int i = 0; i < 16; i++) {
-			GlStateManager._activeTexture(GL20C.GL_TEXTURE0 + i);
+			GlStateManager.glActiveTexture(GL20C.GL_TEXTURE0 + i);
 			GlStateManager._bindTexture(0);
 		}
 
 		// Set the active texture unit to unit 0
 		//
 		// This seems to be what most code expects. It's a sane default in any case.
-		GlStateManager._activeTexture(GL20C.GL_TEXTURE0);
-
-		// Destroy the old world rendering pipeline
-		//
-		// This destroys all loaded shader programs and all of the render targets.
-		if (pipeline != null) {
-			pipeline.destroy();
-		}
-
-		pipeline = null;
+		GlStateManager.glActiveTexture(GL20C.GL_TEXTURE0);
 	}
 }

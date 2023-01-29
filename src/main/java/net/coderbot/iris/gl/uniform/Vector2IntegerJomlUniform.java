@@ -1,7 +1,8 @@
 package net.coderbot.iris.gl.uniform;
 
+import net.coderbot.iris.gl.IrisRenderSystem;
+import net.coderbot.iris.gl.state.ValueUpdateNotifier;
 import net.coderbot.iris.vendored.joml.Vector2i;
-import org.lwjgl.opengl.GL20;
 
 import java.util.function.Supplier;
 
@@ -34,7 +35,7 @@ public class Vector2IntegerJomlUniform extends Uniform {
 
 		if (cachedValue == null || !newValue.equals(cachedValue)) {
 			cachedValue = newValue;
-			GL20.glUniform2i(this.location, newValue.x, newValue.y);
+			IrisRenderSystem.uniform2i(this.location, newValue.x, newValue.y);
 		}
 	}
 }
